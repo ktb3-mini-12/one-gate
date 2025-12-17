@@ -135,16 +135,19 @@ function handleAuthCallback(url) {
         const params = new URLSearchParams(fragment)
         const accessToken = params.get('access_token')
         const refreshToken = params.get('refresh_token')
+        const providerToken = params.get('provider_token')
 
         console.log('[Auth] Access token:', accessToken ? 'found' : 'not found')
         console.log('[Auth] Refresh token:', refreshToken ? 'found' : 'not found')
+        console.log('[Auth] Provider token (Google):', providerToken ? 'found' : 'not found')
 
         if (accessToken) {
           // 메인 창으로 토큰 전달
           if (mainWindow) {
             mainWindow.webContents.send('auth-callback', {
               access_token: accessToken,
-              refresh_token: refreshToken
+              refresh_token: refreshToken,
+              provider_token: providerToken
             })
             console.log('[Auth] Tokens sent to main window')
           }

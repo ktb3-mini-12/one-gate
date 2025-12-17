@@ -1,10 +1,9 @@
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, List
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from fastapi import Header
 
 from database import supabase
 
@@ -18,12 +17,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- [DTO: 데이터 전송 객체 정의] ---
+# --- [DTO] ---
 
 class AnalyzeRequest(BaseModel):
     type: str
     content: str
-    user_id: str  # UUID string
+    user_id: str
     image_url: Optional[str] = None
     tag_id: Optional[int] = None
 
@@ -31,17 +30,32 @@ class TagRequest(BaseModel):
     name: str
     category_type: str
 
+class CalendarEvent(BaseModel):
+    summary: str
+    description: Optional[str] = ""
+    start_time: str  # "2025-12-20T10:00:00"
+    end_time: str
+    calendar_name: Optional[str] = None  # 특정 캘린더 이름
+    category: Optional[str] = None  # Work, Personal 등 -> colorId 매핑
+
+# 카테고리 -> Google Calendar colorId 매핑
+CATEGORY_COLOR_MAP = {
+    "work": "11",      # Red
+    "personal": "2",   # Green
+    "meeting": "5",    # Yellow
+    "important": "4",  # Pink
+    "default": "1"     # Blue
+}
+
 # ----------------------------------
 
 @app.post("/analyze")
 async def analyze_content(request: AnalyzeRequest):
     print(f"[분석] user_id: {request.user_id}, 내용: {request.content[:30]}...")
 
-    # Mock 분석 로직
     is_calendar = "내일" in request.content or "시" in request.content or "일정" in request.content
     category = "CALENDAR" if is_calendar else "MEMO"
 
-    # DB에 저장
     input_data = {
         "user_id": request.user_id,
         "category": category,
@@ -102,29 +116,132 @@ async def create_tag(request: TagRequest):
 
     return {"status": "success", "data": result.data[0] if result.data else None}
 
-class CalendarEvent(BaseModel):
-    summary: str
-    description: str
-    start_time: str # "2025-12-20T10:00:00" 형식
-    end_time: str
+# ----------------------------------
+# Google Calendar APIs
+# ----------------------------------
 
-@app.post("/calendar/test-create")
-async def create_google_event(
-    event_data: CalendarEvent, 
-    # 프론트에서 헤더로 'Google-Token'을 보내줄 겁니다.
-    google_token: str = Header(None, alias="X-Google-Token") 
+@app.post("/sync/calendars")
+async def sync_google_calendars(
+    google_token: str = Header(None, alias="X-Google-Token")
 ):
+    """
+    Google Calendar 목록을 tags 테이블과 완전 동기화
+    - 사용자가 직접 만든 캘린더만 (accessRole=owner, primary 제외)
+    - Google에 없는 기존 태그는 삭제
+    """
+    if not google_token:
+        return {"status": "error", "message": "Google token required"}
+
     try:
-        # 1. 구글 자격 증명(Credentials) 객체 생성
         creds = Credentials(token=google_token)
-        
-        # 2. 구글 캘린더 서비스 빌드
         service = build('calendar', 'v3', credentials=creds)
 
-        # 3. 구글에 보낼 JSON 데이터 조립
+        calendar_list = service.calendarList().list().execute()
+        calendars = calendar_list.get('items', [])
+
+        # 유효한 캘린더 이름 수집
+        valid_calendar_names = []
+        skipped = []
+
+        for cal in calendars:
+            cal_name = cal.get('summary', 'Untitled')
+            cal_id = cal.get('id')
+            access_role = cal.get('accessRole', '')
+            is_primary = cal.get('primary', False)
+
+            # 필터링
+            if access_role != 'owner':
+                skipped.append({"name": cal_name, "reason": "not owner"})
+                continue
+            if is_primary:
+                skipped.append({"name": cal_name, "reason": "primary calendar"})
+                continue
+            if 'holiday' in cal_id.lower() or '#contacts' in cal_id:
+                skipped.append({"name": cal_name, "reason": "system calendar"})
+                continue
+
+            valid_calendar_names.append(cal_name)
+
+        # 1. 기존 CALENDAR 태그 모두 가져오기
+        existing_tags = supabase.table("tags")\
+            .select("*")\
+            .eq("category_type", "CALENDAR")\
+            .execute()
+
+        existing_names = {tag["name"] for tag in existing_tags.data} if existing_tags.data else set()
+        valid_names_set = set(valid_calendar_names)
+
+        # 2. Google에 없는 태그 삭제
+        to_delete = existing_names - valid_names_set
+        deleted = []
+        for name in to_delete:
+            supabase.table("tags")\
+                .delete()\
+                .eq("name", name)\
+                .eq("category_type", "CALENDAR")\
+                .execute()
+            deleted.append(name)
+
+        # 3. 새로운 캘린더 추가
+        to_add = valid_names_set - existing_names
+        added = []
+        for name in to_add:
+            supabase.table("tags").insert({
+                "name": name,
+                "category_type": "CALENDAR"
+            }).execute()
+            added.append(name)
+
+        # 4. 유지된 캘린더
+        kept = valid_names_set & existing_names
+
+        print(f"[Sync] Added: {len(added)}, Deleted: {len(deleted)}, Kept: {len(kept)}")
+        return {
+            "status": "success",
+            "added": list(added),
+            "deleted": list(deleted),
+            "kept": list(kept),
+            "skipped": skipped,
+            "total_synced": len(valid_calendar_names)
+        }
+
+    except Exception as e:
+        print(f"[Sync] Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/calendar/create")
+async def create_calendar_event(
+    event_data: CalendarEvent,
+    google_token: str = Header(None, alias="X-Google-Token")
+):
+    """
+    Google Calendar에 일정 생성
+    - calendar_name: 특정 캘린더에 추가
+    - category: colorId로 매핑해서 primary에 추가
+    """
+    if not google_token:
+        return {"status": "error", "message": "Google token required"}
+
+    try:
+        creds = Credentials(token=google_token)
+        service = build('calendar', 'v3', credentials=creds)
+
+        # 캘린더 ID 결정
+        calendar_id = 'primary'
+
+        if event_data.calendar_name:
+            # 특정 캘린더 이름으로 ID 찾기
+            calendar_list = service.calendarList().list().execute()
+            for cal in calendar_list.get('items', []):
+                if cal.get('summary') == event_data.calendar_name:
+                    calendar_id = cal.get('id')
+                    break
+
+        # 이벤트 바디 생성
         event_body = {
             'summary': event_data.summary,
-            'description': event_data.description,
+            'description': event_data.description or '',
             'start': {
                 'dateTime': event_data.start_time,
                 'timeZone': 'Asia/Seoul',
@@ -135,14 +252,40 @@ async def create_google_event(
             },
         }
 
-        # 4. 실제 API 호출 (primary 캘린더에 일정 추가)
-        event = service.events().insert(calendarId='primary', body=event_body).execute()
+        # 카테고리 -> colorId 매핑
+        if event_data.category:
+            color_id = CATEGORY_COLOR_MAP.get(
+                event_data.category.lower(),
+                CATEGORY_COLOR_MAP["default"]
+            )
+            event_body['colorId'] = color_id
 
-        print(f"일정 생성 완료: {event.get('htmlLink')}")
-        return {"status": "success", "link": event.get('htmlLink')}
+        # 이벤트 생성
+        event = service.events().insert(
+            calendarId=calendar_id,
+            body=event_body
+        ).execute()
+
+        print(f"[Calendar] Event created: {event.get('htmlLink')}")
+        return {
+            "status": "success",
+            "link": event.get('htmlLink'),
+            "calendar_id": calendar_id,
+            "event_id": event.get('id')
+        }
 
     except Exception as e:
-        print(f"에러 발생: {e}")
+        print(f"[Calendar] Error: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# 기존 test-create 유지 (하위 호환)
+@app.post("/calendar/test-create")
+async def create_google_event_legacy(
+    event_data: CalendarEvent,
+    google_token: str = Header(None, alias="X-Google-Token")
+):
+    return await create_calendar_event(event_data, google_token)
+
 
 # 실행: uvicorn main:app --reload

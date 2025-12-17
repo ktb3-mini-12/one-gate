@@ -5,10 +5,11 @@ import axios from 'axios';
 import { supabase } from './lib/supabase';
 const { ipcRenderer } = window.require('electron');
 
-function MainApp({ user }) {
+function MainApp({ user, session }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('ALL'); // ALL, CALENDAR, MEMO
+  const [filter, setFilter] = useState('ALL');
+  const [addingToCalendar, setAddingToCalendar] = useState(null);
 
   // 데이터 불러오기
   const fetchRecords = async () => {
@@ -47,6 +48,61 @@ function MainApp({ user }) {
       setRecords(prev => prev.filter(r => r.id !== id));
     } catch (err) {
       console.error('삭제 실패:', err);
+    }
+  };
+
+  // Google 캘린더에 등록
+  const handleAddToCalendar = async (record) => {
+    // provider_token 확인 (localStorage에서 가져오기)
+    const googleToken = localStorage.getItem('google_provider_token');
+
+    if (!googleToken) {
+      alert('Google 토큰이 없습니다.\n로그아웃 후 다시 로그인해주세요.');
+      return;
+    }
+
+    setAddingToCalendar(record.id);
+
+    try {
+      // 일정 시간 파싱 (간단한 예: 오늘 기준 +1일, 오후 2시~3시)
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(14, 0, 0, 0);
+
+      const endTime = new Date(tomorrow);
+      endTime.setHours(15, 0, 0, 0);
+
+      const formatDateTime = (date) => {
+        return date.toISOString().slice(0, 19);
+      };
+
+      const response = await fetch('http://localhost:8000/calendar/test-create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Google-Token': googleToken
+        },
+        body: JSON.stringify({
+          summary: record.content,
+          description: `One Gate에서 등록된 일정\n생성일: ${new Date(record.created_at).toLocaleString('ko-KR')}`,
+          start_time: formatDateTime(tomorrow),
+          end_time: formatDateTime(endTime)
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.status === 'success') {
+        alert('Google 캘린더에 등록되었습니다!');
+        console.log('캘린더 링크:', result.link);
+      } else {
+        alert('등록 실패: ' + result.message);
+      }
+    } catch (err) {
+      console.error('캘린더 등록 실패:', err);
+      alert('캘린더 등록 중 오류가 발생했습니다.');
+    } finally {
+      setAddingToCalendar(null);
     }
   };
 
@@ -113,7 +169,10 @@ function MainApp({ user }) {
             새로고침
           </button>
           <button
-            onClick={() => supabase.auth.signOut()}
+            onClick={() => {
+              localStorage.removeItem('google_provider_token');
+              supabase.auth.signOut();
+            }}
             style={{
               background: '#f0f0f0',
               color: '#666',
@@ -253,6 +312,38 @@ function MainApp({ user }) {
                   }}>
                     {new Date(record.created_at).toLocaleString('ko-KR')}
                   </div>
+                )}
+
+                {/* 캘린더 등록 버튼 (CALENDAR 항목만) */}
+                {record.category === 'CALENDAR' && (
+                  <button
+                    onClick={() => handleAddToCalendar(record)}
+                    disabled={addingToCalendar === record.id}
+                    style={{
+                      marginTop: '10px',
+                      background: addingToCalendar === record.id ? '#ccc' : '#34A853',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      cursor: addingToCalendar === record.id ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    {addingToCalendar === record.id ? (
+                      '등록 중...'
+                    ) : (
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11zM9 11H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2zm-8 4H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2z"/>
+                        </svg>
+                        Google 캘린더에 등록
+                      </>
+                    )}
+                  </button>
                 )}
               </div>
 

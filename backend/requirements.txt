@@ -9,7 +9,7 @@ fastapi==0.124.4
 h11==0.16.0
 httpcore==1.0.9
 httptools==0.7.1
-httpx==0.28.1
+httpx==0.27.2
 idna==3.11
 jiter==0.12.0
 openai==2.13.0
@@ -28,3 +28,5 @@ uvloop==0.22.1
 watchfiles==1.1.1
 websockets==15.0.1
 supabase==2.10.0
+google-api-python-client==2.111.0
+google-auth==2.27.0
