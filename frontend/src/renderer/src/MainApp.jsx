@@ -178,23 +178,22 @@ function MainApp() {
                   color: '#333',
                   marginBottom: '6px'
                 }}>
-                  {record.summary}
+                  {record.content}
                 </div>
 
-                {record.date && (
+                {record.event_date && (
                   <div style={{
                     fontSize: '13px',
                     color: '#E91E63',
                     marginBottom: '6px'
                   }}>
-                    ⏰ {record.date}
+                    ⏰ {record.event_date}
                   </div>
                 )}
 
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  {record.tags?.map(tag => (
+                {record.tags && (
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                     <span
-                      key={tag}
                       style={{
                         fontSize: '11px',
                         color: '#666',
@@ -203,10 +202,10 @@ function MainApp() {
                         borderRadius: '4px'
                       }}
                     >
-                      {tag}
+                      {record.tags.name}
                     </span>
-                  ))}
-                </div>
+                  </div>
+                )}
 
                 {record.created_at && (
                   <div style={{

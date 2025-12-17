@@ -25,8 +25,8 @@ function MiniInput() {
       return;
     }
 
-    // Enter 누르면 분석 후 창 닫기
-    if (e.key === 'Enter' && query.trim()) {
+    // Enter 누르면 분석 후 창 닫기 (한글 IME 조합 중이면 무시)
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing && query.trim()) {
       await analyze(query);
     }
   };
