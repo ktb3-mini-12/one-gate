@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 const { ipcRenderer } = window.require('electron');
 
-function MiniInput() {
+function MiniInput({ user }) {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const inputRef = useRef(null);
@@ -36,7 +36,8 @@ function MiniInput() {
     try {
       await axios.post('http://localhost:8000/analyze', {
         type: 'text',
-        content
+        content,
+        user_id: user.id  // UUID 전달
       });
 
       // 메인 창에 새로고침 요청 보내기

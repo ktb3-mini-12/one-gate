@@ -2,18 +2,21 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { supabase } from './lib/supabase';
 const { ipcRenderer } = window.require('electron');
 
-function MainApp() {
+function MainApp({ user }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('ALL'); // ALL, CALENDAR, MEMO
 
   // 데이터 불러오기
   const fetchRecords = async () => {
+    if (!user?.id) return;
+
     setLoading(true);
     try {
-      const res = await axios.get('http://localhost:8000/records');
+      const res = await axios.get(`http://localhost:8000/records?user_id=${user.id}`);
       if (res.data.status === 'success') {
         setRecords(res.data.data);
       }
@@ -26,14 +29,16 @@ function MainApp() {
 
   // 처음 로드 & 새로고침 이벤트 수신
   useEffect(() => {
-    fetchRecords();
+    if (user?.id) {
+      fetchRecords();
+    }
 
     ipcRenderer.on('refresh-data', () => {
       fetchRecords();
     });
 
     return () => ipcRenderer.removeAllListeners('refresh-data');
-  }, []);
+  }, [user?.id]);
 
   // 삭제 처리
   const handleDelete = async (id) => {
@@ -75,20 +80,53 @@ function MainApp() {
         }}>
           One Gate
         </h1>
-        <button
-          onClick={fetchRecords}
-          style={{
-            background: '#007AFF',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '8px 16px',
-            fontSize: '14px',
-            cursor: 'pointer'
-          }}
-        >
-          새로고침
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* 사용자 정보 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {user?.user_metadata?.avatar_url && (
+              <img
+                src={user.user_metadata.avatar_url}
+                alt="profile"
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%'
+                }}
+              />
+            )}
+            <span style={{ fontSize: '13px', color: '#666' }}>
+              {user?.user_metadata?.name || user?.email}
+            </span>
+          </div>
+          <button
+            onClick={fetchRecords}
+            style={{
+              background: '#007AFF',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '8px 16px',
+              fontSize: '14px',
+              cursor: 'pointer'
+            }}
+          >
+            새로고침
+          </button>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            style={{
+              background: '#f0f0f0',
+              color: '#666',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '8px 12px',
+              fontSize: '14px',
+              cursor: 'pointer'
+            }}
+          >
+            로그아웃
+          </button>
+        </div>
       </div>
 
       {/* 필터 탭 */}
