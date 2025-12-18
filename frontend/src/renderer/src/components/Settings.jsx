@@ -146,18 +146,51 @@ export function Settings({ user, onBack }) {
     setToast({ message, type })
   }
 
-  useEffect(() => {
+  // [수정 포인트 1] 데이터 새로고침 로직을 별도 함수로 분리
+  const refreshAllData = async () => {
+    console.log('연동 데이터 새로고침 중...')
     const googleToken = getGoogleToken()
     if (googleToken) {
       setCalendarConnected(true)
-      fetchCalendarTags()
+      await fetchCalendarTags()
+    } else {
+      setCalendarConnected(false)
+      setCalendarTags([])
     }
-    fetchMemoTags()
+    await fetchMemoTags()
+  }
+
+  // [수정 포인트 2] 초기 로드 및 일렉트론 신호 리스너 등록
+  useEffect(() => {
+    refreshAllData()
+
+    const ipc = window.electron?.ipcRenderer || window.ipcRenderer
+    if (ipc) {
+      // 신호를 받으면 500ms(0.5초) 뒤에 새로고침 실행
+      const removeListener = ipc.on('refresh-data', () => {
+        setTimeout(() => {
+          refreshAllData()
+          showToast('연동 정보가 업데이트되었습니다.', 'success')
+        }, 500) // 토큰이 스토리지에 써지는 시간을 벌어줍니다.
+      })
+
+      return () => {
+        if (typeof removeListener === 'function') removeListener()
+      }
+    }
   }, [])
 
   const fetchCalendarTags = async () => {
+    if (!user?.id) return; // 유저 정보 없으면 중단
+
     try {
-      const res = await api.get('/categories', { params: { type: 'CALENDAR' } })
+      // params에 user_id를 포함시켜서 요청
+      const res = await api.get('/categories', { 
+        params: { 
+          type: 'CALENDAR',
+          user_id: user.id // <-- 내 ID 추가
+        } 
+      })
       if (res.data.status === 'success') {
         setCalendarTags(res.data.data || [])
       }
@@ -179,6 +212,13 @@ export function Settings({ user, onBack }) {
 
   const handleSyncCalendars = async () => {
     const token = getGoogleToken()
+    
+    // 1. 유저 ID가 있는지 먼저 확인합니다.
+    if (!user?.id) {
+      showToast('사용자 정보를 불러올 수 없습니다.', 'error')
+      return
+    }
+
     if (!token) {
       showToast('Google 토큰이 없습니다. 재로그인 해주세요.', 'error')
       return
@@ -187,13 +227,16 @@ export function Settings({ user, onBack }) {
     setSyncLoading(true)
 
     try {
-      const res = await api.post('/sync/calendars', {}, {
+      // 2. URL 파라미터에 user_id를 추가하여 백엔드에 보냅니다.
+      const res = await api.post(`/sync/calendars?user_id=${user.id}`, {}, {
         headers: { 'X-Google-Token': token }
       })
 
       if (res.data.status === 'success') {
-        const { added, deleted, kept } = res.data
+        const { added, deleted } = res.data
         showToast(`동기화 완료: +${added?.length || 0} 추가, -${deleted?.length || 0} 삭제`, 'success')
+        
+        // 3. 카테고리 목록을 다시 불러올 때도 내 것만 가져오도록 함수 확인 필요
         await fetchCalendarTags()
       } else {
         showToast(res.data.message || '동기화 실패', 'error')
@@ -244,22 +287,46 @@ export function Settings({ user, onBack }) {
     }
   }
 
+  const handleDisconnect = async (type) => {
+    if (!window.confirm(`${type === 'google' ? '구글 캘린더' : '노션'} 연동을 해제하시겠습니까?`)) return;
+
+    try {
+      const endpoint = type === 'google' ? '/auth/update-google-token' : '/auth/update-notion-token';
+      await api.post(endpoint, {
+        user_id: user.id,
+        token: null 
+      });
+      
+      if (type === 'google') {
+        localStorage.removeItem('google_provider_token');
+        setCalendarConnected(false);
+        setCalendarTags([]);
+      }
+      showToast(`${type} 연동이 해제되었습니다.`);
+      refreshAllData();
+    } catch (err) {
+      showToast('연동 해제 중 오류가 발생했습니다.', 'error');
+    }
+  };
+
+  const handleConnectGoogle = () => {
+    const authUrl = `https://mzjeavvumjqgmbkszahs.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:5173&scopes=https://www.googleapis.com/auth/calendar&access_type=offline&prompt=consent`;
+    
+    const ipc = window.electron?.ipcRenderer || window.ipcRenderer
+    if (ipc) {
+      ipc.send('open-auth-window', authUrl);
+    } else {
+      console.error('IPC Renderer를 찾을 수 없습니다.');
+      showToast('일렉트론 환경이 아닙니다.', 'error');
+    }
+  };
+
   const toggleSection = (section) => {
     setExpandedSection(expandedSection === section ? null : section)
   }
 
-  // Service configurations
-  const calendarServices = [
-    { id: 'google', name: 'Google Calendar', icon: '📅', connected: calendarConnected }
-  ]
-
-  const memoServices = [
-    { id: 'notion', name: 'Notion', icon: '📝', connected: true }
-  ]
-
   return (
     <div className="min-h-full p-6 pb-16" style={{ background: 'var(--app-bg)' }}>
-      {/* Toast */}
       {toast && (
         <Toast
           message={toast.message}
@@ -269,7 +336,6 @@ export function Settings({ user, onBack }) {
       )}
 
       <div className="max-w-xl mx-auto">
-        {/* Header */}
         <div className="flex items-center gap-4 mb-8">
           <button
             onClick={onBack}
@@ -288,7 +354,6 @@ export function Settings({ user, onBack }) {
           </div>
         </div>
 
-        {/* User Card */}
         {user && (
           <div
             className="rounded-[24px] p-5 mb-6 flex items-center gap-4"
@@ -321,14 +386,12 @@ export function Settings({ user, onBack }) {
           </div>
         )}
 
-        {/* Section Title */}
         <div className="mb-4 px-1">
           <h2 style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
             일정 연결
           </h2>
         </div>
 
-        {/* Calendar Services */}
         <div className="space-y-3 mb-8">
           <ServiceCard
             icon="📅"
@@ -340,26 +403,48 @@ export function Settings({ user, onBack }) {
             accentColor="#4285F4"
           >
             <div className="space-y-4">
-              {/* Sync Button */}
-              <button
-                onClick={handleSyncCalendars}
-                disabled={syncLoading || !calendarConnected}
-                className="w-full py-3 rounded-xl flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-50"
-                style={{
-                  background: 'linear-gradient(135deg, #4285F4, #1a73e8)',
-                  color: '#fff',
-                  fontWeight: '500',
-                  fontSize: '14px'
-                }}
-              >
-                <span className={syncLoading ? 'animate-spin' : ''}>
-                  <SyncIcon />
-                </span>
-                {syncLoading ? '동기화 중...' : '캘린더 동기화'}
-              </button>
+              {calendarConnected ? (
+                <>
+                  <button
+                    onClick={handleSyncCalendars}
+                    disabled={syncLoading}
+                    className="w-full py-3 rounded-xl flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-50"
+                    style={{
+                      background: 'linear-gradient(135deg, #4285F4, #1a73e8)',
+                      color: '#fff',
+                      fontWeight: '500',
+                      fontSize: '14px'
+                    }}
+                  >
+                    <span className={syncLoading ? 'animate-spin' : ''}>
+                      <SyncIcon />
+                    </span>
+                    {syncLoading ? '동기화 중...' : '캘린더 동기화'}
+                  </button>
+                  <button
+                    onClick={() => handleDisconnect('google')}
+                    className="w-full py-2 text-xs transition-all opacity-60 hover:opacity-100"
+                    style={{ color: '#EF4444', textDecoration: 'underline', background: 'none', border: 'none' }}
+                  >
+                    구글 캘린더 연동 해제하기
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleConnectGoogle}
+                  className="w-full py-3 rounded-xl flex items-center justify-center gap-2 transition-all hover:opacity-90"
+                  style={{
+                    background: 'linear-gradient(135deg, #4285F4, #1a73e8)',
+                    color: '#fff',
+                    fontWeight: '600',
+                    fontSize: '14px'
+                  }}
+                >
+                  구글 계정 연동하기
+                </button>
+              )}
 
-              {/* Calendar Tags */}
-              {calendarTags.length > 0 && (
+              {calendarConnected && calendarTags.length > 0 && (
                 <div>
                   <small style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '10px' }}>
                     동기화된 캘린더
@@ -383,26 +468,16 @@ export function Settings({ user, onBack }) {
                   </div>
                 </div>
               )}
-
-              {!calendarConnected && (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '13px', textAlign: 'center' }}>
-                  Google 로그인 후 캘린더를 동기화하세요
-                </p>
-              )}
             </div>
           </ServiceCard>
-
-          {/* Future: Apple Calendar, Outlook 등 추가 가능 */}
         </div>
 
-        {/* Section Title */}
         <div className="mb-4 px-1">
           <h2 style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
             메모 연결
           </h2>
         </div>
 
-        {/* Memo Services */}
         <div className="space-y-3">
           <ServiceCard
             icon="📝"
@@ -497,11 +572,8 @@ export function Settings({ user, onBack }) {
               </div>
             </div>
           </ServiceCard>
-
-          {/* Future: Apple Notes, Obsidian 등 추가 가능 */}
         </div>
 
-        {/* Footer Info */}
         <div className="mt-8 text-center">
           <small style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
             더 많은 서비스가 곧 추가됩니다
@@ -509,7 +581,6 @@ export function Settings({ user, onBack }) {
         </div>
       </div>
 
-      {/* Custom Animation Styles */}
       <style>{`
         @keyframes slide-down {
           from {

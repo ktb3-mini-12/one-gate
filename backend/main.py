@@ -1,12 +1,19 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from datetime import datetime
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from notion_client import Client as NotionClient
+import httpx
+import base64
 
-from database import supabase, notion, NOTION_DB_ID
+from database import (
+    supabase, notion, NOTION_DB_ID,
+    NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
+)
 
 # AI 라우터 (Gemini)
 try:
@@ -150,12 +157,11 @@ async def complete_record(record_id: int):
     return {"status": "error", "message": "Record not found"}
 
 @app.get("/categories")
-async def get_categories(type: Optional[str] = None):
+async def get_categories(user_id: str, type: Optional[str] = None): # user_id 인자 추가
     """
-    카테고리 목록 조회
-    - type: MEMO / CALENDAR 필터링
+    내 카테고리만 조회
     """
-    query = supabase.table("category").select("*")
+    query = supabase.table("category").select("*").eq("user_id", user_id) # 필터링 추가
     if type:
         query = query.eq("type", type)
     result = query.execute()
@@ -190,88 +196,57 @@ async def delete_category(category_id: int):
 
 @app.post("/sync/calendars")
 async def sync_google_calendars(
+    user_id: str, 
     google_token: str = Header(None, alias="X-Google-Token")
 ):
-    """
-    Google Calendar 목록을 category 테이블과 완전 동기화
-    - 사용자가 직접 만든 캘린더만 (accessRole=owner, primary 제외)
-    - Google에 없는 기존 카테고리는 삭제
-    """
     if not google_token:
         return {"status": "error", "message": "Google token required"}
 
     try:
         creds = Credentials(token=google_token)
         service = build('calendar', 'v3', credentials=creds)
-
         calendar_list = service.calendarList().list().execute()
         calendars = calendar_list.get('items', [])
 
-        # 유효한 캘린더 이름 수집
         valid_calendar_names = []
-        skipped = []
-
         for cal in calendars:
             cal_name = cal.get('summary', 'Untitled')
-            cal_id = cal.get('id')
-            access_role = cal.get('accessRole', '')
-            is_primary = cal.get('primary', False)
+            # 필터링 조건 유지...
+            if cal.get('accessRole') == 'owner' and not cal.get('primary'):
+                valid_calendar_names.append(cal_name)
 
-            # 필터링
-            if access_role != 'owner':
-                skipped.append({"name": cal_name, "reason": "not owner"})
-                continue
-            if is_primary:
-                skipped.append({"name": cal_name, "reason": "primary calendar"})
-                continue
-            if 'holiday' in cal_id.lower() or '#contacts' in cal_id:
-                skipped.append({"name": cal_name, "reason": "system calendar"})
-                continue
-
-            valid_calendar_names.append(cal_name)
-
-        # 1. 기존 CALENDAR 카테고리 모두 가져오기
+        # 1. 내 카테고리만 조회
         existing_categories = supabase.table("category")\
             .select("*")\
+            .eq("user_id", user_id)\
             .eq("type", "CALENDAR")\
             .execute()
 
         existing_names = {cat["name"] for cat in existing_categories.data} if existing_categories.data else set()
         valid_names_set = set(valid_calendar_names)
 
-        # 2. Google에 없는 카테고리 삭제
+        # 2. 삭제 시 user_id 조건 반드시 추가 (보안 핵심)
         to_delete = existing_names - valid_names_set
-        deleted = []
         for name in to_delete:
             supabase.table("category")\
                 .delete()\
                 .eq("name", name)\
+                .eq("user_id", user_id)\
                 .eq("type", "CALENDAR")\
                 .execute()
-            deleted.append(name)
 
-        # 3. 새로운 캘린더 추가
+        # 3. 추가 시 user_id 포함 (잘 하셨습니다!)
         to_add = valid_names_set - existing_names
         added = []
         for name in to_add:
             supabase.table("category").insert({
                 "name": name,
-                "type": "CALENDAR"
+                "type": "CALENDAR",
+                "user_id": user_id 
             }).execute()
             added.append(name)
 
-        # 4. 유지된 캘린더
-        kept = valid_names_set & existing_names
-
-        print(f"[Sync] Added: {len(added)}, Deleted: {len(deleted)}, Kept: {len(kept)}")
-        return {
-            "status": "success",
-            "added": list(added),
-            "deleted": list(deleted),
-            "kept": list(kept),
-            "skipped": skipped,
-            "total_synced": len(valid_calendar_names)
-        }
+        return {"status": "success", "added": list(added), "total": len(valid_calendar_names)}
 
     except Exception as e:
         print(f"[Sync] Error: {e}")
@@ -395,6 +370,260 @@ async def create_notion_memo(request: NotionMemoRequest):
     except Exception as e:
         print(f"[Notion] Error: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# ----------------------------------
+# Notion OAuth
+# ----------------------------------
+
+NOTION_AUTH_URL = "https://api.notion.com/v1/oauth/authorize"
+NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
+
+@app.get("/auth/notion")
+async def notion_auth(user_id: str):
+    """
+    Notion OAuth 인증 시작
+    - user_id를 state에 포함시켜 콜백에서 사용자 식별
+    """
+    if not NOTION_CLIENT_ID or not NOTION_REDIRECT_URI:
+        raise HTTPException(status_code=500, detail="Notion OAuth not configured")
+
+    auth_url = (
+        f"{NOTION_AUTH_URL}"
+        f"?client_id={NOTION_CLIENT_ID}"
+        f"&response_type=code"
+        f"&owner=user"
+        f"&redirect_uri={NOTION_REDIRECT_URI}"
+        f"&state={user_id}"
+    )
+
+    return {"auth_url": auth_url}
+
+
+@app.get("/auth/notion/callback")
+async def notion_callback(
+    code: str = Query(...),
+    state: str = Query(...)  # user_id
+):
+    """
+    Notion OAuth 콜백 처리
+    - code를 access_token으로 교환
+    - users 테이블에 토큰 저장
+    """
+    if not NOTION_CLIENT_ID or not NOTION_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Notion OAuth not configured")
+
+    user_id = state
+
+    try:
+        # Basic Auth 헤더 생성
+        credentials = f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}"
+        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+        # Access Token 요청
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                NOTION_TOKEN_URL,
+                headers={
+                    "Authorization": f"Basic {encoded_credentials}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": NOTION_REDIRECT_URI
+                }
+            )
+
+        if response.status_code != 200:
+            print(f"[Notion OAuth] Token error: {response.text}")
+            raise HTTPException(status_code=400, detail="Failed to get access token")
+
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        workspace_name = token_data.get("workspace_name")
+        workspace_id = token_data.get("workspace_id")
+        bot_id = token_data.get("bot_id")
+
+        print(f"[Notion OAuth] Success - Workspace: {workspace_name}")
+
+        # users 테이블에 토큰 저장
+        result = supabase.table("users")\
+            .update({"notion_access_token": access_token})\
+            .eq("id", user_id)\
+            .execute()
+
+        if not result.data:
+            # 사용자가 없으면 에러 (또는 upsert 처리)
+            print(f"[Notion OAuth] User not found: {user_id}")
+
+        # 프론트엔드로 리다이렉트 (성공)
+        # Electron 앱의 경우 딥링크 또는 window.close() 페이지로 리다이렉트
+        return RedirectResponse(
+            url=f"http://localhost:5173?notion_connected=true&workspace={workspace_name}"
+        )
+
+    except httpx.HTTPError as e:
+        print(f"[Notion OAuth] HTTP Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        print(f"[Notion OAuth] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/auth/notion/status")
+async def notion_auth_status(user_id: str):
+    """
+    사용자의 Notion 연결 상태 확인
+    """
+    try:
+        result = supabase.table("users")\
+            .select("notion_access_token")\
+            .eq("id", user_id)\
+            .single()\
+            .execute()
+
+        if result.data and result.data.get("notion_access_token"):
+            # 토큰 유효성 검증 (선택적)
+            token = result.data["notion_access_token"]
+            try:
+                notion_client = NotionClient(auth=token)
+                user_info = notion_client.users.me()
+                return {
+                    "status": "connected",
+                    "user": user_info.get("name"),
+                    "bot_id": user_info.get("bot", {}).get("owner", {}).get("user", {}).get("id")
+                }
+            except Exception:
+                return {"status": "expired", "message": "Token expired or invalid"}
+
+        return {"status": "not_connected"}
+
+    except Exception as e:
+        print(f"[Notion Status] Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.delete("/auth/notion/disconnect")
+async def notion_disconnect(user_id: str):
+    """
+    Notion 연결 해제 (토큰 삭제)
+    """
+    try:
+        result = supabase.table("users")\
+            .update({"notion_access_token": None})\
+            .eq("id", user_id)\
+            .execute()
+
+        if result.data:
+            return {"status": "success", "message": "Notion disconnected"}
+        return {"status": "error", "message": "User not found"}
+
+    except Exception as e:
+        print(f"[Notion Disconnect] Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/notion/create-with-token")
+async def create_notion_memo_with_token(
+    request: NotionMemoRequest,
+    user_id: str = Query(...)
+):
+    """
+    사용자의 OAuth 토큰을 사용해서 노션에 메모 생성
+    """
+    try:
+        # 사용자 토큰 조회
+        user_result = supabase.table("users")\
+            .select("notion_access_token")\
+            .eq("id", user_id)\
+            .single()\
+            .execute()
+
+        if not user_result.data or not user_result.data.get("notion_access_token"):
+            return {"status": "error", "message": "Notion not connected"}
+
+        token = user_result.data["notion_access_token"]
+        user_notion = NotionClient(auth=token)
+
+        # 사용자가 접근 가능한 데이터베이스 목록 조회
+        search_result = user_notion.search(
+            filter={"property": "object", "value": "database"}
+        )
+
+        databases = search_result.get("results", [])
+        if not databases:
+            return {"status": "error", "message": "No accessible databases found"}
+
+        # 첫 번째 데이터베이스에 페이지 생성 (또는 특정 DB 지정)
+        target_db = databases[0]
+        db_id = target_db["id"]
+
+        # 데이터베이스 스키마 확인
+        db_info = user_notion.databases.retrieve(db_id)
+        properties = db_info.get("properties", {})
+
+        # 제목 속성 찾기
+        title_prop = None
+        for prop_name, prop_info in properties.items():
+            if prop_info.get("type") == "title":
+                title_prop = prop_name
+                break
+
+        if not title_prop:
+            return {"status": "error", "message": "No title property found in database"}
+
+        # 페이지 생성
+        result = user_notion.pages.create(
+            parent={"database_id": db_id},
+            properties={
+                title_prop: {
+                    "title": [{"text": {"content": request.content}}]
+                }
+            }
+        )
+
+        notion_url = result.get("url")
+        print(f"[Notion OAuth] 메모 생성 완료: {notion_url}")
+
+        return {
+            "status": "success",
+            "url": notion_url,
+            "page_id": result.get("id"),
+            "database": target_db.get("title", [{}])[0].get("text", {}).get("content", "Unknown")
+        }
+
+    except Exception as e:
+        print(f"[Notion OAuth Create] Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# backend/main.py
+
+class TokenUpdateRequest(BaseModel):
+    user_id: str
+    token: Optional[str] = None  # None이면 DB에 null로 저장됨
+
+@app.post("/auth/update-google-token")
+async def update_google_token(request: TokenUpdateRequest):
+    try:
+        # provider_token을 google_refresh_token 컬럼에 저장
+        supabase.table("users").update({
+            "google_refresh_token": request.token
+        }).eq("id", request.user_id).execute()
+        return {"status": "success", "message": "Google token updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/auth/update-notion-token")
+async def update_notion_token(request: TokenUpdateRequest):
+    try:
+        supabase.table("users").update({
+            "notion_access_token": request.token
+        }).eq("id", request.user_id).execute()
+        return {"status": "success", "message": "Notion token updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # 실행: uvicorn main:app --reload

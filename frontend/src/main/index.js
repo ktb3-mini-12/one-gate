@@ -144,17 +144,20 @@ function handleAuthCallback(url) {
         console.log('[Auth] Provider token (Google):', providerToken ? 'found' : 'not found')
 
         if (accessToken) {
-          // 메인 창으로 토큰 전달
-          if (mainWindow) {
-            mainWindow.webContents.send('auth-callback', {
-              access_token: accessToken,
-              refresh_token: refreshToken,
-              provider_token: providerToken
-            })
-            console.log('[Auth] Tokens sent to main window')
-          }
+          // 1. 메인 창으로 토큰 전달 (기존 코드)
+          mainWindow.webContents.send('auth-callback', {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            provider_token: providerToken
+          })
+          
+          // [수정 포인트] 리액트 창에 데이터 갱신 신호를 보냅니다.
+          // 이 신호가 있어야 Settings.jsx의 useEffect 리스너가 작동합니다.
+          setTimeout(() => {
+            mainWindow.webContents.send('refresh-data')
+          }, 100)
 
-          // 인증 창 닫기
+          // 2. 인증 창 닫기 (기존 코드)
           if (authWindow) {
             authWindow.close()
           }
