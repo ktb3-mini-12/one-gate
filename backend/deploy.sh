@@ -35,7 +35,5 @@ echo "🔥 [4/4] 서버를 재시작합니다..."
 source venv/bin/activate
 nohup uvicorn main:app --reload --host 0.0.0.0 --port $PORT > $LOG_FILE 2>&1 < /dev/null &
 
-echo "✅ 배포 완료! (잠시 후 로그가 출력됩니다. 나가려면 Ctrl+C)"
-echo "-------------------------------------------------------"
-sleep 1
-tail -f $LOG_FILE
+echo "✅ 배포 완료!"
+echo "✅ tail -f $LOG_FILE 로 로그를 확인하세요."
