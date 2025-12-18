@@ -2,8 +2,8 @@
 ai/app.py
 
 Gemini 기반 입력 분석 서비스 (텍스트 / 이미지 / PDF)
-- 'schedule' 또는 'memo' JSON을 반환
-- 실행: uvicorn ai.app:app --reload
+- 'CALENDAR' 또는 'MEMO' JSON을 반환
+- main.py에서 라우터로 통합: from ai.app import router
 
 환경변수:
 - GOOGLE_API_KEY (필수)
@@ -20,13 +20,19 @@ from datetime import datetime
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
 
-from google import genai
-from google.genai import types
+# google-genai 패키지 import (설치 필요: pip install google-genai)
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    genai = None
+    types = None
 
 load_dotenv(override=True)
 
@@ -38,9 +44,13 @@ KST = ZoneInfo("Asia/Seoul")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 API_KEY = os.getenv("GOOGLE_API_KEY")
-client: Optional[genai.Client] = genai.Client(api_key=API_KEY) if API_KEY else None
+client = None
 
-if not API_KEY:
+if GENAI_AVAILABLE and API_KEY:
+    client = genai.Client(api_key=API_KEY)
+elif not GENAI_AVAILABLE:
+    logger.warning("google-genai 패키지가 설치되지 않았습니다. pip install google-genai")
+elif not API_KEY:
     logger.warning("GOOGLE_API_KEY가 설정되지 않았습니다.")
 
 
@@ -94,29 +104,11 @@ class AnalyzeResponse(BaseModel):
     data: dict
 
 
-class HealthResponse(BaseModel):
-    status: str
-    has_api_key: bool
-    model: str
-
-
-# ============ FastAPI App ============
-app = FastAPI(
-    title="AI Analyzer (Gemini)",
-    description="텍스트/이미지/PDF를 분석하여 일정 또는 메모로 분류",
-    version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ============ APIRouter ============
+router = APIRouter(prefix="/ai", tags=["AI"])
 
 
 # ============ Prompt ============
-
 ANALYSIS_PROMPT = """당신은 입력된 내용을 분석하여 'CALENDAR(일정)' 또는 'MEMO(메모)'로 분류하는 AI입니다.
 
 ## 분류 기준:
@@ -199,22 +191,17 @@ ANALYSIS_PROMPT = """당신은 입력된 내용을 분석하여 'CALENDAR(일정
 
 
 # ============ Helpers ============
-
 def _today_kst_str() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d")
 
 
 def _parse_json_response(text: str) -> dict:
-    """
-    모델이 ```json ...``` 으로 감싸거나, 앞/뒤에 설명을 붙여도 최대한 JSON만 뽑아냅니다.
-    """
+    """모델이 ```json ...``` 으로 감싸거나, 앞/뒤에 설명을 붙여도 최대한 JSON만 뽑아냅니다."""
     try:
-        # ```json ... ```
         m = re.search(r"```json\s*([\s\S]*?)\s*```", text)
         if m:
             return json.loads(m.group(1))
 
-        # 첫 { 부터 마지막 } 까지
         m = re.search(r"\{[\s\S]*\}", text)
         if m:
             return json.loads(m.group(0))
@@ -224,21 +211,24 @@ def _parse_json_response(text: str) -> dict:
         return {"error": "JSON 파싱 실패", "raw": text}
 
 
-def _require_client() -> genai.Client:
+def _require_client():
+    if not GENAI_AVAILABLE:
+        raise HTTPException(
+            status_code=500,
+            detail="google-genai 패키지가 설치되지 않았습니다. pip install google-genai",
+        )
     if client is None:
         raise HTTPException(
             status_code=500,
-            detail="Gemini API 키가 없습니다. GOOGLE_API_KEY 또는 GEMINI_API_KEY를 .env에 설정하세요.",
+            detail="Gemini API 키가 없습니다. GOOGLE_API_KEY를 .env에 설정하세요.",
         )
     return client
 
 
 def _guess_image_mime(upload: UploadFile) -> str:
-    # FastAPI UploadFile.content_type을 최대한 신뢰하되, 없으면 기본값
     ct = (upload.content_type or "").lower()
     if ct.startswith("image/"):
         return ct
-    # fallback: 확장자 기준
     name = (upload.filename or "").lower()
     if name.endswith(".png"):
         return "image/png"
@@ -258,7 +248,7 @@ def _build_prompt() -> str:
     return ANALYSIS_PROMPT.format(today=_today_kst_str())
 
 
-def _gemini_generate(contents: list[types.Part | str]) -> dict:
+def _gemini_generate(contents: list) -> dict:
     """google-genai SDK 호출 (JSON 응답 강제)"""
     c = _require_client()
     prompt = _build_prompt()
@@ -283,18 +273,17 @@ def _gemini_generate(contents: list[types.Part | str]) -> dict:
         raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
 
 
-# ============ API ============
-
+# ============ API Endpoints ============
 InputType = Literal["text", "image", "pdf"]
 
 
-@app.post("/analyze", response_model=AnalyzeResponse)
+@router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(
     type: InputType = Form(..., description="입력 타입: text, image, pdf"),
     content: Optional[str] = Form(None, description="텍스트 내용 (type=text일 때)"),
     file: Optional[UploadFile] = File(None, description="파일 (type=image/pdf일 때)"),
 ):
-    """입력을 분석하여 일정(schedule) 또는 메모(memo)로 분류"""
+    """입력을 분석하여 CALENDAR 또는 MEMO로 분류"""
     logger.info(f"분석 요청 - 타입: {type}")
 
     if type == "text":
@@ -323,10 +312,11 @@ async def analyze(
     raise HTTPException(status_code=400, detail="지원하지 않는 type입니다. (text/image/pdf)")
 
 
-@app.get("/health")
+@router.get("/health")
 async def health():
     return {
         "status": "ok",
+        "genai_available": GENAI_AVAILABLE,
         "has_api_key": bool(API_KEY),
         "model": MODEL,
     }
