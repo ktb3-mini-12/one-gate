@@ -1,14 +1,65 @@
 // frontend/src/main/index.js
 
-import { app, shell, BrowserWindow, globalShortcut, ipcMain } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain } from 'electron'
 import { join } from 'path'
-import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { electronApp, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 
 let miniWindow = null // 미니 입력 창
 let mainWindow = null // 메인 앱 창
 let authWindow = null
 let notionAuthWindow = null
+
+const APP_ID = 'net.ogapp.onegate'
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) return
+
+  autoUpdater.autoDownload = true
+
+  const sendUpdateStatus = (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', payload)
+    }
+  }
+
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdateStatus({ state: 'checking' })
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    sendUpdateStatus({ state: 'available', info })
+  })
+
+  autoUpdater.on('update-not-available', (info) => {
+    sendUpdateStatus({ state: 'not-available', info })
+  })
+
+  autoUpdater.on('error', (error) => {
+    sendUpdateStatus({ state: 'error', error: String(error?.message || error) })
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    sendUpdateStatus({ state: 'downloading', progress })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateStatus({ state: 'downloaded', info })
+  })
+
+  ipcMain.handle('check-for-updates', async () => {
+    if (!app.isPackaged) return { skipped: true }
+    return autoUpdater.checkForUpdates()
+  })
+
+  ipcMain.on('install-update', () => {
+    if (!app.isPackaged) return
+    autoUpdater.quitAndInstall()
+  })
+
+  autoUpdater.checkForUpdatesAndNotify()
+}
 
 // 미니 입력 창 생성 (Spotlight 스타일)
 function createMiniWindow() {
@@ -248,13 +299,14 @@ function handleAuthCallback(url) {
 }
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.onegate')
+  electronApp.setAppUserModelId(APP_ID)
 
   createMiniWindow()
   createMainWindow()
 
   // 앱 시작 시 메인 창 표시
   mainWindow.show()
+  setupAutoUpdater()
 
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     if (miniWindow.isVisible()) {

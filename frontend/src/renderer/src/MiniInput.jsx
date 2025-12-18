@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import axios from 'axios'
+import { api } from './lib/api'
 const { ipcRenderer } = window.require('electron')
 
 function MiniInput({ user }) {
