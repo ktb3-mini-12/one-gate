@@ -51,21 +51,6 @@ function App() {
         if (tokens.provider_token) {
           setGoogleToken(tokens.provider_token)
           console.log('[App] Google provider_token saved')
-
-          // DB에도 토큰 저장
-          try {
-            const { data: { session: currentSession } } = await supabase.auth.getSession()
-            if (currentSession?.user?.id) {
-              const { api } = await import('./lib/api')
-              await api.post('/auth/update-google-token', {
-                user_id: currentSession.user.id,
-                token: tokens.provider_token
-              })
-              console.log('[App] Google token saved to DB')
-            }
-          } catch (dbErr) {
-            console.error('[App] Failed to save token to DB:', dbErr)
-          }
         }
       } catch (err) {
         console.error('[App] Auth callback error:', err)

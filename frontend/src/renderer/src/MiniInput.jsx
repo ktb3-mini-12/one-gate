@@ -165,30 +165,15 @@ function MiniInput({ user }) {
         borderRadius: '20px',
         overflow: 'hidden',
         boxShadow: isDragging
-          ? '0 0 0 2px var(--action-primary), 0 25px 50px -12px var(--action-secondary), 0 0 22px var(--action-secondary)'
+          ? '0 0 0 2px transparent, 0 25px 50px -12px var(--action-secondary), 0 0 22px var(--action-secondary)'
           : isFocused
-            ? '0 0 0 1px var(--action-primary), 0 25px 50px -12px var(--action-secondary), 0 0 18px var(--action-secondary)'
+            ? '0 0 0 1px transparent, 0 25px 50px -12px var(--action-secondary), 0 0 18px var(--action-secondary)'
             : '0 25px 50px -12px var(--action-secondary), 0 0 0 1px var(--divider)',
         backdropFilter: 'blur(20px)',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
         position: 'relative'
       }}
     >
-      {/* 상단 그라데이션 라인 */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: '10%',
-          right: '10%',
-          height: '1px',
-          background:
-            'linear-gradient(90deg, var(--surface-primary), var(--action-primary), var(--action-secondary), var(--surface-primary))',
-          opacity: isFocused || hasContent ? 1 : 0.5,
-          transition: 'opacity 0.3s ease'
-        }}
-      />
-
       {/* 이미지 미리보기 */}
       {image && (
         <div

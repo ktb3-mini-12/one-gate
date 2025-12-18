@@ -324,12 +324,27 @@ export function Settings({ user, onBack }) {
   const handleDisconnectGoogle = async () => {
     if (!window.confirm('구글 캘린더 연동을 해제하시겠습니까?')) return
     try {
-      await api.post('/auth/update-google-token', { user_id: user.id, token: null })
+      const response = await api.delete('/calendar/auth/disconnect', {
+        params: { user_id: user.id }
+      })
+
+      if (response.data.status === 'success') {
+        localStorage.removeItem('google_provider_token')
+        setCalendarConnected(false)
+        setCalendarTags([])
+        showToast('연동이 해제되었습니다.')
+      } else {
+        throw new Error(response.data.message || 'Disconnect failed')
+      }
+    } catch (error) {
+      console.error('[Settings] Google disconnect error:', error)
+      showToast('연동 해제 중 오류가 발생했습니다.', 'error')
+
+      // Still clear localStorage to reset UI state
       localStorage.removeItem('google_provider_token')
       setCalendarConnected(false)
       setCalendarTags([])
-      showToast('연동이 해제되었습니다.')
-    } catch {}
+    }
   }
 
   const handleDisconnectNotion = async () => {
@@ -344,7 +359,10 @@ export function Settings({ user, onBack }) {
       setSelectedPageId(null)
       setShowPageSelector(false)
       showToast('연동이 해제되었습니다.')
-    } catch {}
+    } catch (error) {
+      console.error('[Settings] Notion disconnect error:', error)
+      showToast('연동 해제 중 오류가 발생했습니다.', 'error')
+    }
   }
 
   const toggleSection = (section) => setExpandedSection(expandedSection === section ? null : section)

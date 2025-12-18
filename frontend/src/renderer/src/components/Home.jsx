@@ -42,7 +42,7 @@ export function Home({ user, session, onNavigateToSettings }) {
           return {
             id: String(record.id),
             summary: isAnalysisFailed ? (record.text || '분석 실패') : (record.result?.summary || record.text),
-            category: record.category?.name || 'general',
+            category: record.category?.name || record.result?.category || 'general',
             date: createdAt ? createdAt.toLocaleDateString('ko-KR') : '',
             status,
             categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
@@ -115,6 +115,7 @@ export function Home({ user, session, onNavigateToSettings }) {
             rawData: nextRaw,
             status: (nextRaw.status || card.rawData?.status || 'PENDING').toLowerCase(),
             summary: nextRaw.result?.summary || nextRaw.text || card.summary,
+            category: nextRaw.result?.category || card.category || 'general',
             categoryType: nextRaw.type === 'CALENDAR' ? '일정' : '메모'
           }
         })
@@ -541,36 +542,6 @@ export function Home({ user, session, onNavigateToSettings }) {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* SSE Connection Status */}
-            <div
-              className="flex items-center gap-1.5"
-              title={
-                sseStatus === 'connected'
-                  ? '실시간 연결됨'
-                  : sseStatus === 'connecting'
-                    ? '연결 중...'
-                    : '연결 끊김'
-              }
-            >
-              <div
-                className={`w-2 h-2 rounded-full ${sseStatus === 'connecting' ? 'animate-pulse' : ''}`}
-                style={{
-                  background:
-                    sseStatus === 'connected'
-                      ? '#10B981'
-                      : sseStatus === 'connecting'
-                        ? '#F59E0B'
-                        : '#EF4444',
-                  boxShadow:
-                    sseStatus === 'connected'
-                      ? '0 0 6px rgba(16, 185, 129, 0.5)'
-                      : sseStatus === 'connecting'
-                        ? '0 0 6px rgba(245, 158, 11, 0.5)'
-                        : '0 0 6px rgba(239, 68, 68, 0.5)'
-                }}
-              />
-            </div>
-
             {/* Upload progress indicator */}
             {isUploading && (
               <div className="flex items-center gap-2 mr-2">

@@ -34,7 +34,7 @@ const formatDateForInput = (dateString) => {
 
 // 공통 input 스타일
 const inputStyle = {
-  background: 'var(--surface-gradient-top)',
+  background: 'var(--surface-secondary)',
   color: 'var(--text-primary)',
   fontSize: '14px'
 }
@@ -74,14 +74,6 @@ export function CardDetail({
   const imageUrl = rawData?.image_url
   const errorMessage = isAnalysisFailed ? analysis.error || 'AI 분석에 실패했습니다' : null
 
-  // 초기값 설정
-  const initialBody =
-    typeof analysis.body === 'string'
-      ? analysis.body
-      : typeof analysis.content === 'string'
-        ? analysis.content
-        : ''
-
   // 공통 State
   const [draftSummary, setDraftSummary] = useState(analysis.summary || summary || '')
 
@@ -96,7 +88,6 @@ export function CardDetail({
   const [draftRecurrence, setDraftRecurrence] = useState(analysis.recurrence || '')
 
   // MEMO State
-  const [draftBody, setDraftBody] = useState(initialBody)
   const [draftDueDate, setDraftDueDate] = useState(formatDateForInput(analysis.due_date))
 
   const validateBeforeUpload = (data, type) => {
@@ -134,8 +125,6 @@ export function CardDetail({
       finalData.recurrence = draftRecurrence || null
     } else {
       // MEMO 타입
-      finalData.body = draftBody
-      finalData.content = draftBody
       finalData.due_date = draftDueDate || null
     }
 
@@ -170,8 +159,7 @@ export function CardDetail({
           onClick={(e) => e.stopPropagation()}
           className="w-full max-w-md rounded-[28px] overflow-hidden animate-scale-in max-h-[90vh] overflow-y-auto"
           style={{
-            background:
-              'linear-gradient(180deg, var(--surface-elevated) 0%, var(--surface-primary) 100%)',
+            background: 'var(--surface-primary)',
             border: '1px solid var(--divider)',
             boxShadow: 'var(--shadow-deep)'
           }}
@@ -179,9 +167,6 @@ export function CardDetail({
           {/* Header */}
           <div
             className="p-6 pb-4"
-            style={{
-              background: `linear-gradient(135deg, ${typeConfig.bg}, transparent)`
-            }}
           >
             <div className="flex items-center justify-between mb-4">
               {/* Category Type */}
@@ -204,7 +189,7 @@ export function CardDetail({
                 onClick={onClose}
                 className="w-8 h-8 rounded-full flex items-center justify-center transition-all hover:opacity-70"
                 style={{
-                  background: 'var(--surface-gradient-top)',
+                  background: 'var(--surface-secondary)',
                   color: 'var(--text-secondary)'
                 }}
               >
@@ -217,8 +202,7 @@ export function CardDetail({
               <div
                 className="w-2.5 h-2.5 rounded-full"
                 style={{
-                  background: config.color,
-                  boxShadow: `0 0 10px ${config.glow}`
+                  background: config.color
                 }}
               />
               <small style={{ color: config.color, fontWeight: '500' }}>{statusLabel}</small>
@@ -269,7 +253,7 @@ export function CardDetail({
             <div
               className="h-px mb-4"
               style={{
-                background: 'linear-gradient(90deg, transparent, var(--divider), transparent)'
+                background: 'var(--divider)'
               }}
             />
 
@@ -403,36 +387,13 @@ export function CardDetail({
               </div>
             )}
 
-            {/* MEMO 타입 필드 */}
-            {isTemporary && !isCalendar && (
-              <div className="space-y-3 mb-4">
-                {/* 본문 */}
-                <div>
-                  <label className="block text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>
-                    본문
-                  </label>
-                  <textarea
-                    value={draftBody}
-                    onChange={(e) => setDraftBody(e.target.value)}
-                    className="w-full border-none outline-none resize-none rounded-xl px-4 py-3"
-                    style={{
-                      ...inputStyle,
-                      minHeight: '100px'
-                    }}
-                    disabled={isUploading}
-                    placeholder="내용을 입력하세요"
-                  />
-                </div>
-              </div>
-            )}
-
             {/* Meta Info */}
             <div className="flex items-center gap-3 mb-4">
               {category && category !== 'general' && (
                 <span
                   className="px-3 py-1 rounded-lg"
                   style={{
-                    background: 'var(--surface-gradient-top)',
+                    background: 'var(--surface-secondary)',
                     color: 'var(--text-secondary)',
                     fontSize: '13px',
                     border: '1px solid var(--divider)'
@@ -483,7 +444,7 @@ export function CardDetail({
                   disabled={isUploading}
                   className={`${isAnalysisFailed ? 'w-full' : 'flex-1'} py-3 rounded-2xl transition-all hover:opacity-80 disabled:opacity-50`}
                   style={{
-                    background: 'var(--surface-gradient-top)',
+                    background: 'var(--surface-secondary)',
                     color: 'var(--text-secondary)',
                     border: '1px solid var(--divider)',
                     fontWeight: '500',
@@ -500,12 +461,10 @@ export function CardDetail({
                     disabled={isUploading}
                     className="flex-1 py-3 rounded-2xl transition-all hover:opacity-90 disabled:opacity-70 flex items-center justify-center gap-2"
                     style={{
-                      background:
-                        'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
+                      background: 'var(--action-primary)',
                       color: '#fff',
                       fontWeight: '500',
-                      fontSize: '14px',
-                      boxShadow: 'var(--shadow-glow-blue)'
+                      fontSize: '14px'
                     }}
                   >
                     {isUploading ? (
