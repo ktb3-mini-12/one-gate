@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { api, API_BASE_URL } from '../lib/api'
+import { getGoogleToken, clearGoogleToken } from '../lib/tokenManager'
 import { CardItem } from './CardItem'
 import { CardDetail } from './CardDetail'
 import { ConfirmModal } from './ConfirmModal'
@@ -230,7 +231,7 @@ export function Home({ user, session, onNavigateToSettings }) {
   }
 
   const handleBulkUpload = async () => {
-    const googleToken = localStorage.getItem('google_provider_token')
+    const googleToken = getGoogleToken()
 
     setIsUploading(true)
     let successCount = 0
@@ -327,7 +328,7 @@ export function Home({ user, session, onNavigateToSettings }) {
   const handleUploadSingle = async (finalData = null) => {
     if (!selectedCardId) return
 
-    const googleToken = localStorage.getItem('google_provider_token')
+    const googleToken = getGoogleToken()
     const card = cards.find((c) => c.id === selectedCardId)
     if (!card?.rawData) return
 
@@ -396,7 +397,7 @@ export function Home({ user, session, onNavigateToSettings }) {
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('google_provider_token')
+    clearGoogleToken()
     supabase.auth.signOut()
   }
 

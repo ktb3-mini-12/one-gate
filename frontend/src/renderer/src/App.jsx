@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
+import { setGoogleToken } from './lib/tokenManager'
 import MiniInput from './MiniInput'
 import { Login } from './components/Login'
 import { Home } from './components/Home'
@@ -48,7 +49,7 @@ function App() {
         }
 
         if (tokens.provider_token) {
-          localStorage.setItem('google_provider_token', tokens.provider_token)
+          setGoogleToken(tokens.provider_token)
           console.log('[App] Google provider_token saved')
         }
       } catch (err) {

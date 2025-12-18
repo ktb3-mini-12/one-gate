@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../lib/api'
+import { getGoogleToken, clearGoogleToken } from '../lib/tokenManager'
 import { Toast } from './ui/Toast'
 import { SyncIcon, ChevronIcon } from './ui/Icons'
 
@@ -85,8 +86,6 @@ export function Settings({ user, onBack }) {
   const [memoTags, setMemoTags] = useState([])
   const [isAddingMemoTag, setIsAddingMemoTag] = useState(false)
   const [newMemoTagName, setNewMemoTagName] = useState('')
-
-  const getGoogleToken = () => localStorage.getItem('google_provider_token')
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
@@ -244,7 +243,7 @@ export function Settings({ user, onBack }) {
       });
       
       if (type === 'google') {
-        localStorage.removeItem('google_provider_token');
+        clearGoogleToken();
         setCalendarConnected(false);
         setCalendarTags([]);
       }
