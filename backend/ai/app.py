@@ -437,20 +437,20 @@ def _build_prompt(
 
     if memo_cats:
         instructions.append(
-            f"**MEMO 카테고리**: 반드시 다음 중에서 선택하세요: {', '.join(memo_cats)}"
+            f"**MEMO 카테고리**: 다음 목록에서만 선택 (다른 카테고리 사용 금지): [{', '.join(memo_cats)}]"
         )
     else:
         instructions.append(
-            "**MEMO 카테고리**: 내용에 가장 적합한 카테고리를 자유롭게 추천하세요. (예: 할 일, 아이디어, 쇼핑, 일상 등)"
+            "**MEMO 카테고리**: 내용에 가장 적합한 카테고리를 자유롭게 추천하세요."
         )
 
     if calendar_cats:
         instructions.append(
-            f"**CALENDAR 카테고리**: 반드시 다음 중에서 선택하세요: {', '.join(calendar_cats)}"
+            f"**CALENDAR 카테고리**: 다음 목록에서만 선택 (다른 카테고리 사용 금지): [{', '.join(calendar_cats)}]"
         )
     else:
         instructions.append(
-            "**CALENDAR 카테고리**: 내용에 가장 적합한 카테고리를 자유롭게 추천하세요. (예: 약속, 회의, 운동, 여행 등)"
+            "**CALENDAR 카테고리**: 내용에 가장 적합한 카테고리를 자유롭게 추천하세요."
         )
 
     category_instruction = "\n".join(instructions)

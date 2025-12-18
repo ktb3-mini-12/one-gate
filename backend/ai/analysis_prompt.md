@@ -18,7 +18,7 @@
   "type": "CALENDAR",
   "summary": "민수와 홍대 저녁 약속",
   "content": "원본 입력 내용",
-  "category": "약속",
+  "category": "(CALENDAR 카테고리 목록 중 하나)",
   "start_time": "2025-12-19T19:00:00+09:00",
   "end_time": "2025-12-19T21:00:00+09:00",
   "all_day": false,
@@ -38,7 +38,7 @@
   "type": "MEMO",
   "summary": "발표자료 제작",
   "content": "원본 입력 내용",
-  "category": "할 일",
+  "category": "(MEMO 카테고리 목록 중 하나)",
   "start_time": null,
   "end_time": null,
   "all_day": null,
@@ -57,7 +57,7 @@
 - **type** (필수): "CALENDAR" 또는 "MEMO"
 - **summary** (필수): 핵심 요약 (30자 이내)
 - **content** (필수): 원본 입력 내용
-- **category** (필수): 단일 카테고리 (약속, 회의, 업무, 할 일, 아이디어, 일상 등)
+- **category** (필수): 아래 "카테고리" 섹션에서 type에 맞는 목록 중 **반드시 하나만** 선택 (목록에 없는 카테고리 절대 사용 금지)
 
 ### CALENDAR 전용:
 - **start_time**: ISO 8601 형식 (예: 2025-12-19T19:00:00+09:00)
@@ -76,6 +76,12 @@
 
 ## 카테고리:
 {category_instruction}
+
+### ⚠️ 카테고리 선택 규칙 (필수):
+1. **type이 "CALENDAR"면 → CALENDAR 카테고리 목록에서만 선택**
+2. **type이 "MEMO"면 → MEMO 카테고리 목록에서만 선택**
+3. **위 목록에 없는 카테고리는 절대 사용 금지** (예: "약속", "회의" 등 임의 생성 금지)
+4. 가장 적합한 카테고리가 없더라도 반드시 위 목록 중 하나를 선택하세요
 
 ## 주의사항:
 - 오늘 날짜: {today}
