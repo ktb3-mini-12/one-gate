@@ -117,17 +117,16 @@ else:
 # API Routers
 from api import records, notion, calendar, categories
 
-# Records router (no prefix - /analyze is at root level)
+# Records router (/records/*)
 app.include_router(records.router)
 
-# Notion routers (auth + management)
-app.include_router(notion.auth_router)
-app.include_router(notion.notion_router)
+# Notion router (/notion/*)
+app.include_router(notion.router)
 
-# Calendar router
+# Calendar router (/calendar/*)
 app.include_router(calendar.router)
 
-# Categories router
+# Categories router (/categories/*)
 app.include_router(categories.router)
 
 print("[API] All routers mounted successfully")

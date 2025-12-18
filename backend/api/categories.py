@@ -9,10 +9,10 @@ from database import supabase
 from models.schemas import CategoryRequest
 
 
-router = APIRouter(tags=["categories"])
+router = APIRouter(prefix="/categories", tags=["Categories"])
 
 
-@router.get("/categories")
+@router.get("")
 async def get_categories(user_id: str, type: Optional[str] = None):
     """Get user's categories"""
     query = supabase.table("category").select("*").eq("user_id", user_id)
@@ -22,7 +22,7 @@ async def get_categories(user_id: str, type: Optional[str] = None):
     return {"status": "success", "data": result.data}
 
 
-@router.post("/categories")
+@router.post("")
 async def create_category(request: CategoryRequest, user_id: str = Query(None)):
     """Create category (user_id from body or query)"""
     final_user_id = request.user_id or user_id
@@ -37,7 +37,7 @@ async def create_category(request: CategoryRequest, user_id: str = Query(None)):
     return {"status": "success", "data": result.data[0] if result.data else None}
 
 
-@router.delete("/categories/{category_id}")
+@router.delete("/{category_id}")
 async def delete_category(category_id: int):
     """Delete category"""
     result = supabase.table("category").delete().eq("id", category_id).execute()

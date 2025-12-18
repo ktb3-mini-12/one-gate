@@ -111,7 +111,7 @@ function MiniInput({ user }) {
       if (queryText) formData.append('text', queryText)
       if (imageFile) formData.append('image', imageFile)
 
-      await axios.post(`${API_BASE_URL}/analyze`, formData, {
+      await axios.post(`${API_BASE_URL}/records/analyze`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
 

@@ -165,7 +165,7 @@ export function Settings({ user, onBack }) {
     if (!user?.id) return
     setIsLoadingNotion(true)
     try {
-      const res = await api.get('/auth/notion/status', { params: { user_id: user.id } })
+      const res = await api.get('/notion/auth/status', { params: { user_id: user.id } })
       if (res.data.status === 'connected') {
         setNotionConnected(true)
         await checkNotionDatabaseStatus()
@@ -263,7 +263,7 @@ export function Settings({ user, onBack }) {
     if (!user?.id || !token) return showToast('Google 토큰이 없습니다.', 'error')
     setSyncLoading(true)
     try {
-      const res = await api.post(`/sync/calendars?user_id=${user.id}`, {}, { headers: { 'X-Google-Token': token } })
+      const res = await api.post(`/calendar/sync?user_id=${user.id}`, {}, { headers: { 'X-Google-Token': token } })
       if (res.data.status === 'success') {
         showToast(`동기화 완료: +${res.data.added?.length || 0} 추가`)
         await fetchCalendarTags()
@@ -315,7 +315,7 @@ export function Settings({ user, onBack }) {
   const handleConnectNotion = async () => {
     if (!user?.id) return
     try {
-      const res = await api.get('/auth/notion', { params: { user_id: user.id } })
+      const res = await api.get('/notion/auth', { params: { user_id: user.id } })
       const ipc = window.electron?.ipcRenderer || window.ipcRenderer
       if (ipc && res.data.auth_url) ipc.send('open-notion-auth-window', res.data.auth_url)
     } catch {}
@@ -335,7 +335,7 @@ export function Settings({ user, onBack }) {
   const handleDisconnectNotion = async () => {
     if (!window.confirm('노션 연동을 해제하시겠습니까?')) return
     try {
-      await api.delete('/auth/notion/disconnect', { params: { user_id: user.id } })
+      await api.delete('/notion/auth/disconnect', { params: { user_id: user.id } })
       setNotionConnected(false)
       setNotionDbStatus(null)
       setNotionDbName(null)

@@ -11,10 +11,10 @@ from models.schemas import CalendarEvent
 from helpers.calendar_helpers import CATEGORY_COLOR_MAP
 
 
-router = APIRouter()
+router = APIRouter(prefix="/calendar", tags=["Calendar"])
 
 
-@router.post("/sync/calendars")
+@router.post("/sync")
 async def sync_google_calendars(
     user_id: str,
     google_token: str = Header(None, alias="X-Google-Token"),
@@ -94,7 +94,7 @@ async def sync_google_calendars(
         return {"status": "error", "message": str(e)}
 
 
-@router.post("/calendar/create")
+@router.post("/create")
 async def create_calendar_event(
     event_data: CalendarEvent, google_token: str = Header(None, alias="X-Google-Token")
 ):
@@ -138,13 +138,3 @@ async def create_calendar_event(
         return {"status": "error", "message": str(e)}
 
 
-@router.post("/calendar/test-create")
-async def create_google_event_legacy(
-    event_data: CalendarEvent,
-    google_token: str = Header(None, alias="X-Google-Token"),
-):
-    """
-    [DEPRECATED] Legacy endpoint for backward compatibility.
-    Use POST /calendar/create instead.
-    """
-    return await create_calendar_event(event_data, google_token)

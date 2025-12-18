@@ -31,7 +31,7 @@ from helpers.notion_helpers import (
 )
 
 
-router = APIRouter()
+router = APIRouter(prefix="/records", tags=["Records"])
 
 
 # Import _broker from main at module level
@@ -169,7 +169,7 @@ async def analyze_content(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/records/stream")
+@router.get("/stream")
 async def stream_records(user_id: str, request: Request):
     """
     Server-Sent Events (SSE) stream for real-time record updates.
@@ -208,7 +208,7 @@ async def stream_records(user_id: str, request: Request):
     )
 
 
-@router.patch("/records/{record_id}")
+@router.patch("/{record_id}")
 async def update_record(record_id: int, request: UpdateRecordRequest):
     """
     Update record text or analysis data.
@@ -258,7 +258,7 @@ async def update_record(record_id: int, request: UpdateRecordRequest):
     return {"status": "success", "data": updated.data[0]}
 
 
-@router.get("/records")
+@router.get("")
 async def get_records(user_id: str, status: Optional[str] = None):
     """
     Get user's records with optional status filter.
@@ -280,7 +280,7 @@ async def get_records(user_id: str, status: Optional[str] = None):
     return {"status": "success", "data": result.data}
 
 
-@router.delete("/records/{record_id}")
+@router.delete("/{record_id}")
 async def delete_record(record_id: int):
     """
     Soft delete a record.
@@ -300,7 +300,7 @@ async def delete_record(record_id: int):
     return {"status": "error", "message": "Record not found"}
 
 
-@router.post("/records/{record_id}/upload")
+@router.post("/{record_id}/upload")
 async def upload_record(
     record_id: int,
     request: UploadRequest,

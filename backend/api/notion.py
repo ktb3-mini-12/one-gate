@@ -3,7 +3,6 @@ Notion OAuth and management endpoints.
 """
 
 import base64
-from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -12,18 +11,11 @@ from notion_client import Client as NotionClient
 
 from database import (
     supabase,
-    notion,
     NOTION_CLIENT_ID,
     NOTION_CLIENT_SECRET,
     NOTION_REDIRECT_URI,
-    NOTION_DB_ID,
 )
-from models.schemas import NotionMemoRequest, CreateDatabaseRequest
-from helpers.notion_helpers import (
-    get_notion_properties_cached,
-    add_notion_property,
-    _notion_property_cache,
-)
+from models.schemas import CreateDatabaseRequest
 
 
 # OAuth constants
@@ -32,13 +24,13 @@ NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
 
 
 # ============================================================
-# Auth Router - Notion OAuth Flow
+# Notion Router - Single unified router for all Notion endpoints
 # ============================================================
 
-auth_router = APIRouter(prefix="/auth/notion", tags=["Notion OAuth"])
+router = APIRouter(prefix="/notion", tags=["Notion"])
 
 
-@auth_router.get("")
+@router.get("/auth")
 async def notion_auth(user_id: str):
     """
     Start Notion OAuth authentication.
@@ -60,7 +52,7 @@ async def notion_auth(user_id: str):
     return {"auth_url": auth_url}
 
 
-@auth_router.get("/callback")
+@router.get("/auth/callback")
 async def notion_callback(code: str = Query(...), state: str = Query(...)):
     """
     Handle Notion OAuth callback.
@@ -116,7 +108,7 @@ async def notion_callback(code: str = Query(...), state: str = Query(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@auth_router.get("/status")
+@router.get("/auth/status")
 async def notion_auth_status(user_id: str):
     """
     Check user's Notion connection status.
@@ -156,7 +148,7 @@ async def notion_auth_status(user_id: str):
         return {"status": "error", "message": str(e)}
 
 
-@auth_router.delete("/disconnect")
+@router.delete("/auth/disconnect")
 async def notion_disconnect(user_id: str):
     """
     Disconnect Notion integration.
@@ -182,137 +174,11 @@ async def notion_disconnect(user_id: str):
 
 
 # ============================================================
-# Notion Router - Database & Page Management
+# Notion Database & Page Management
 # ============================================================
 
-notion_router = APIRouter(prefix="/notion", tags=["Notion Management"])
 
-
-@notion_router.post("/create")
-async def create_notion_memo(request: NotionMemoRequest):
-    """
-    [DEPRECATED - Development Only] Create Notion memo using server integration token.
-
-    Use POST /records/{id}/upload instead for production.
-    This endpoint uses the server's NOTION_SECRET and NOTION_DB_ID.
-    """
-    if not notion or not NOTION_DB_ID:
-        return {"status": "error", "message": "Notion integration not configured"}
-
-    try:
-        title = request.content.strip().splitlines()[0][:100] if request.content.strip() else "OneGate Memo"
-
-        # Detect or create required properties
-        props_info = get_notion_properties_cached(notion, NOTION_DB_ID)
-
-        # If Category property doesn't exist, add it
-        if props_info["needs_category"]:
-            try:
-                add_notion_property(
-                    notion,
-                    NOTION_DB_ID,
-                    "Category",
-                    {
-                        "select": {
-                            "options": [
-                                {"name": "아이디어", "color": "blue"},
-                                {"name": "할 일", "color": "green"},
-                                {"name": "메모", "color": "yellow"},
-                                {"name": "일정", "color": "red"},
-                                {"name": "기타", "color": "gray"}
-                            ]
-                        }
-                    }
-                )
-                print(f"[Notion] Added 'Category' property to database {NOTION_DB_ID}")
-                # Invalidate cache
-                if NOTION_DB_ID in _notion_property_cache:
-                    del _notion_property_cache[NOTION_DB_ID]
-                props_info = get_notion_properties_cached(notion, NOTION_DB_ID)
-            except Exception as e:
-                print(f"[Notion] Failed to add Category property: {e}")
-
-        # Create page with detected property names
-        page = notion.pages.create(
-            parent={"database_id": NOTION_DB_ID},
-            properties={
-                props_info["title_property"]: {
-                    "title": [{"type": "text", "text": {"content": title}}]
-                },
-                props_info["category_property"]: {
-                    "select": {"name": request.category}
-                },
-            },
-            children=[
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": request.content}}]},
-                }
-            ],
-        )
-        return {"status": "success", "data": {"page_id": page.get("id")}}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-@notion_router.post("/create-with-token")
-async def create_notion_memo_with_token(request: NotionMemoRequest, user_id: str = Query(...)):
-    """
-    [DEPRECATED - Test Only] Create Notion memo using user's OAuth token.
-
-    Use POST /records/{id}/upload instead for production.
-    This endpoint was used for testing user OAuth tokens.
-    """
-    try:
-        user_result = supabase.table("users").select("notion_access_token").eq("id", user_id).single().execute()
-
-        if not user_result.data or not user_result.data.get("notion_access_token"):
-            return {"status": "error", "message": "Notion not connected"}
-
-        token = user_result.data["notion_access_token"]
-        user_notion = NotionClient(auth=token)
-
-        search_result = user_notion.search(filter={"property": "object", "value": "database"})
-        databases = search_result.get("results", [])
-        if not databases:
-            return {"status": "error", "message": "No accessible databases found"}
-
-        target_db = databases[0]
-        db_id = target_db["id"]
-        db_info = user_notion.databases.retrieve(db_id)
-        properties = db_info.get("properties", {})
-
-        title_prop = None
-        for prop_name, prop_info in properties.items():
-            if prop_info.get("type") == "title":
-                title_prop = prop_name
-                break
-
-        if not title_prop:
-            return {"status": "error", "message": "No title property found in database"}
-
-        result = user_notion.pages.create(
-            parent={"database_id": db_id},
-            properties={title_prop: {"title": [{"text": {"content": request.content}}]}},
-        )
-
-        notion_url = result.get("url")
-        print(f"[Notion OAuth] 메모 생성 완료: {notion_url}")
-
-        return {
-            "status": "success",
-            "url": notion_url,
-            "page_id": result.get("id"),
-            "database": target_db.get("title", [{}])[0].get("text", {}).get("content", "Unknown"),
-        }
-
-    except Exception as e:
-        print(f"[Notion OAuth Create] Error: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@notion_router.get("/pages")
+@router.get("/pages")
 async def get_notion_pages(user_id: str):
     """
     Get list of accessible Notion pages.
@@ -371,7 +237,7 @@ async def get_notion_pages(user_id: str):
         return {"status": "error", "message": str(e)}
 
 
-@notion_router.post("/setup-database")
+@router.post("/setup-database")
 async def setup_notion_database(request: CreateDatabaseRequest):
     """
     Setup One Gate database in selected page.
@@ -499,7 +365,7 @@ async def setup_notion_database(request: CreateDatabaseRequest):
         return {"status": "error", "message": str(e)}
 
 
-@notion_router.get("/database-status")
+@router.get("/database-status")
 async def get_notion_database_status(user_id: str):
     """
     Check user's Notion database setup status.
