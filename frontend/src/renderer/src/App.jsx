@@ -83,7 +83,7 @@ function DevTools() {
       return
     }
 
-    setLoading('create')
+    setLoading('calendar')
     setResult(null)
 
     const tomorrow = new Date()
@@ -106,12 +106,12 @@ function DevTools() {
           description: 'Dev Tools에서 생성된 테스트 일정입니다.',
           start_time: formatDT(tomorrow),
           end_time: formatDT(endTime),
-          calendar_name: selectedCalendar  // 선택된 캘린더에 생성
+          calendar_name: selectedCalendar
         })
       })
       const data = await res.json()
-      setResult({ type: 'create', data })
-      console.log('[DevTools] Create result:', data)
+      setResult({ type: 'calendar', data })
+      console.log('[DevTools] Calendar result:', data)
 
       if (data.status === 'success') {
         alert(`"${selectedCalendar}" 캘린더에 일정이 생성되었습니다!`)
@@ -119,7 +119,36 @@ function DevTools() {
         alert('생성 실패: ' + data.message)
       }
     } catch (err) {
-      setResult({ type: 'create', error: err.message })
+      setResult({ type: 'calendar', error: err.message })
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleTestNotion = async () => {
+    setLoading('notion')
+    setResult(null)
+
+    try {
+      const res = await fetch('http://localhost:8000/notion/test-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: '[Test] One Gate 테스트 메모',
+          category: '아이디어'
+        })
+      })
+      const data = await res.json()
+      setResult({ type: 'notion', data })
+      console.log('[DevTools] Notion result:', data)
+
+      if (data.status === 'success') {
+        alert('노션에 메모가 생성되었습니다!')
+      } else {
+        alert('생성 실패: ' + data.message)
+      }
+    } catch (err) {
+      setResult({ type: 'notion', error: err.message })
     } finally {
       setLoading(null)
     }
@@ -203,14 +232,26 @@ function DevTools() {
 
         <button
           onClick={handleTestCreate}
-          disabled={loading === 'create' || calendars.length === 0}
+          disabled={loading === 'calendar' || calendars.length === 0}
           style={{
-            ...buttonStyle(loading === 'create' || calendars.length === 0),
+            ...buttonStyle(loading === 'calendar' || calendars.length === 0),
             background: calendars.length === 0 ? '#555' : '#34A853',
             color: 'white'
           }}
         >
-          {loading === 'create' ? 'Creating...' : 'Test Create Event'}
+          {loading === 'calendar' ? 'Creating...' : 'Test Create Event'}
+        </button>
+
+        <button
+          onClick={handleTestNotion}
+          disabled={loading === 'notion'}
+          style={{
+            ...buttonStyle(loading === 'notion'),
+            background: '#000',
+            color: 'white'
+          }}
+        >
+          {loading === 'notion' ? 'Creating...' : 'Test Notion'}
         </button>
       </div>
 
@@ -236,7 +277,8 @@ function DevTools() {
                   {result.data.kept?.length || 0} kept
                 </>
               )}
-              {result.type === 'create' && `Created: ${result.data.status}`}
+              {result.type === 'calendar' && `Created: ${result.data.status}`}
+              {result.type === 'notion' && `Notion: ${result.data.status}`}
             </span>
           )}
         </div>

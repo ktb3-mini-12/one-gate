@@ -5,7 +5,7 @@ from typing import Optional, List
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from database import supabase
+from database import supabase, notion, NOTION_DB_ID
 
 app = FastAPI()
 
@@ -25,6 +25,10 @@ class AnalyzeRequest(BaseModel):
     user_id: str
     image_url: Optional[str] = None
     tag_id: Optional[int] = None
+
+class NotionMemoRequest(BaseModel):
+    content: str
+    category: str = "아이디어"
 
 class TagRequest(BaseModel):
     name: str
@@ -286,6 +290,47 @@ async def create_google_event_legacy(
     google_token: str = Header(None, alias="X-Google-Token")
 ):
     return await create_calendar_event(event_data, google_token)
+
+
+# ----------------------------------
+# Notion API
+# ----------------------------------
+
+@app.post("/notion/test-create")
+async def create_notion_memo(request: NotionMemoRequest):
+    """
+    노션 DB에 메모 생성 (테스트용)
+    - 내용: 제목 컬럼
+    - 카테고리: 선택 컬럼 (기본값: 아이디어)
+    """
+    if not notion or not NOTION_DB_ID:
+        return {"status": "error", "message": "Notion not configured"}
+
+    try:
+        result = notion.pages.create(
+            parent={"database_id": NOTION_DB_ID},
+            properties={
+                "내용": {
+                    "title": [{"text": {"content": request.content}}]
+                },
+                "카테고리": {
+                    "select": {"name": request.category}
+                }
+            }
+        )
+
+        notion_url = result.get("url")
+        print(f"[Notion] 생성 완료: {notion_url}")
+
+        return {
+            "status": "success",
+            "url": notion_url,
+            "page_id": result.get("id")
+        }
+
+    except Exception as e:
+        print(f"[Notion] Error: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # 실행: uvicorn main:app --reload
