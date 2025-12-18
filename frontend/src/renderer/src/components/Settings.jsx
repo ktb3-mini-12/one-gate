@@ -5,12 +5,22 @@ import { Toast } from './ui/Toast'
 import { SyncIcon, ChevronIcon } from './ui/Icons'
 
 // Service Card Component
-function ServiceCard({ icon, name, description, isConnected, isExpanded, onToggle, children, accentColor }) {
+function ServiceCard({
+  icon,
+  name,
+  description,
+  isConnected,
+  isExpanded,
+  onToggle,
+  children,
+  accentColor
+}) {
   return (
     <div
       className="rounded-[24px] overflow-hidden transition-all duration-300"
       style={{
-        background: 'linear-gradient(180deg, var(--surface-primary) 0%, rgba(28, 29, 31, 0.8) 100%)',
+        background:
+          'linear-gradient(180deg, var(--surface-primary) 0%, rgba(28, 29, 31, 0.8) 100%)',
         border: isExpanded ? `1px solid ${accentColor}30` : '1px solid transparent'
       }}
     >
@@ -41,9 +51,7 @@ function ServiceCard({ icon, name, description, isConnected, isExpanded, onToggl
                 />
               )}
             </div>
-            <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-              {description}
-            </span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{description}</span>
           </div>
         </div>
         <div style={{ color: 'var(--text-secondary)' }}>
@@ -62,7 +70,9 @@ function ServiceCard({ icon, name, description, isConnected, isExpanded, onToggl
         <div className="px-5 pb-5">
           <div
             className="h-px mb-4"
-            style={{ background: 'linear-gradient(90deg, transparent, var(--divider), transparent)' }}
+            style={{
+              background: 'linear-gradient(90deg, transparent, var(--divider), transparent)'
+            }}
           />
           {children}
         </div>
@@ -126,15 +136,15 @@ export function Settings({ user, onBack }) {
   }, [])
 
   const fetchCalendarTags = async () => {
-    if (!user?.id) return; // 유저 정보 없으면 중단
+    if (!user?.id) return // 유저 정보 없으면 중단
 
     try {
       // params에 user_id를 포함시켜서 요청
-      const res = await api.get('/categories', { 
-        params: { 
+      const res = await api.get('/categories', {
+        params: {
           type: 'CALENDAR',
           user_id: user.id // <-- 내 ID 추가
-        } 
+        }
       })
       if (res.data.status === 'success') {
         setCalendarTags(res.data.data || [])
@@ -157,7 +167,7 @@ export function Settings({ user, onBack }) {
 
   const handleSyncCalendars = async () => {
     const token = getGoogleToken()
-    
+
     // 1. 유저 ID가 있는지 먼저 확인합니다.
     if (!user?.id) {
       showToast('사용자 정보를 불러올 수 없습니다.', 'error')
@@ -173,14 +183,21 @@ export function Settings({ user, onBack }) {
 
     try {
       // 2. URL 파라미터에 user_id를 추가하여 백엔드에 보냅니다.
-      const res = await api.post(`/sync/calendars?user_id=${user.id}`, {}, {
-        headers: { 'X-Google-Token': token }
-      })
+      const res = await api.post(
+        `/sync/calendars?user_id=${user.id}`,
+        {},
+        {
+          headers: { 'X-Google-Token': token }
+        }
+      )
 
       if (res.data.status === 'success') {
         const { added, deleted } = res.data
-        showToast(`동기화 완료: +${added?.length || 0} 추가, -${deleted?.length || 0} 삭제`, 'success')
-        
+        showToast(
+          `동기화 완료: +${added?.length || 0} 추가, -${deleted?.length || 0} 삭제`,
+          'success'
+        )
+
         // 3. 카테고리 목록을 다시 불러올 때도 내 것만 가져오도록 함수 확인 필요
         await fetchCalendarTags()
       } else {
@@ -204,7 +221,10 @@ export function Settings({ user, onBack }) {
     setIsAddingMemoTag(false)
 
     try {
-      const res = await api.post(`/categories?user_id=${user.id}`, { name: categoryName, type: 'MEMO' })
+      const res = await api.post(`/categories?user_id=${user.id}`, {
+        name: categoryName,
+        type: 'MEMO'
+      })
       if (res.data.data) {
         setMemoTags((prev) =>
           prev.map((cat) => (cat.id === tempId ? { ...cat, id: res.data.data.id } : cat))
@@ -233,38 +253,39 @@ export function Settings({ user, onBack }) {
   }
 
   const handleDisconnect = async (type) => {
-    if (!window.confirm(`${type === 'google' ? '구글 캘린더' : '노션'} 연동을 해제하시겠습니까?`)) return;
+    if (!window.confirm(`${type === 'google' ? '구글 캘린더' : '노션'} 연동을 해제하시겠습니까?`))
+      return
 
     try {
-      const endpoint = type === 'google' ? '/auth/update-google-token' : '/auth/update-notion-token';
+      const endpoint = type === 'google' ? '/auth/update-google-token' : '/auth/update-notion-token'
       await api.post(endpoint, {
         user_id: user.id,
-        token: null 
-      });
-      
+        token: null
+      })
+
       if (type === 'google') {
-        clearGoogleToken();
-        setCalendarConnected(false);
-        setCalendarTags([]);
+        clearGoogleToken()
+        setCalendarConnected(false)
+        setCalendarTags([])
       }
-      showToast(`${type} 연동이 해제되었습니다.`);
-      refreshAllData();
+      showToast(`${type} 연동이 해제되었습니다.`)
+      refreshAllData()
     } catch (err) {
-      showToast('연동 해제 중 오류가 발생했습니다.', 'error');
+      showToast('연동 해제 중 오류가 발생했습니다.', 'error')
     }
-  };
+  }
 
   const handleConnectGoogle = () => {
-    const authUrl = `https://mzjeavvumjqgmbkszahs.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:5173&scopes=https://www.googleapis.com/auth/calendar&access_type=offline&prompt=consent`;
-    
+    const authUrl = `https://mzjeavvumjqgmbkszahs.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:5173&scopes=https://www.googleapis.com/auth/calendar&access_type=offline&prompt=consent`
+
     const ipc = window.electron?.ipcRenderer || window.ipcRenderer
     if (ipc) {
-      ipc.send('open-auth-window', authUrl);
+      ipc.send('open-auth-window', authUrl)
     } else {
-      console.error('IPC Renderer를 찾을 수 없습니다.');
-      showToast('일렉트론 환경이 아닙니다.', 'error');
+      console.error('IPC Renderer를 찾을 수 없습니다.')
+      showToast('일렉트론 환경이 아닙니다.', 'error')
     }
-  };
+  }
 
   const toggleSection = (section) => {
     setExpandedSection(expandedSection === section ? null : section)
@@ -272,13 +293,7 @@ export function Settings({ user, onBack }) {
 
   return (
     <div className="min-h-full p-6 pb-16" style={{ background: 'var(--app-bg)' }}>
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
       <div className="max-w-xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
@@ -286,7 +301,8 @@ export function Settings({ user, onBack }) {
             onClick={onBack}
             className="w-10 h-10 rounded-2xl flex items-center justify-center transition-all hover:scale-105"
             style={{
-              background: 'linear-gradient(135deg, var(--surface-primary), var(--surface-gradient-top))',
+              background:
+                'linear-gradient(135deg, var(--surface-primary), var(--surface-gradient-top))',
               color: 'var(--text-secondary)',
               border: '1px solid var(--divider)'
             }}
@@ -294,7 +310,9 @@ export function Settings({ user, onBack }) {
             ←
           </button>
           <div>
-            <h1 style={{ color: 'var(--text-primary)', fontSize: '24px', fontWeight: '700' }}>설정</h1>
+            <h1 style={{ color: 'var(--text-primary)', fontSize: '24px', fontWeight: '700' }}>
+              설정
+            </h1>
             <small style={{ color: 'var(--text-secondary)' }}>서비스 연결 및 카테고리 관리</small>
           </div>
         </div>
@@ -303,7 +321,8 @@ export function Settings({ user, onBack }) {
           <div
             className="rounded-[24px] p-5 mb-6 flex items-center gap-4"
             style={{
-              background: 'linear-gradient(135deg, var(--surface-primary), rgba(14, 123, 246, 0.05))',
+              background:
+                'linear-gradient(135deg, var(--surface-primary), rgba(14, 123, 246, 0.05))',
               border: '1px solid var(--divider)'
             }}
           >
@@ -332,7 +351,15 @@ export function Settings({ user, onBack }) {
         )}
 
         <div className="mb-4 px-1">
-          <h2 style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+          <h2
+            style={{
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              fontWeight: '600',
+              letterSpacing: '0.5px',
+              textTransform: 'uppercase'
+            }}
+          >
             일정 연결
           </h2>
         </div>
@@ -369,7 +396,12 @@ export function Settings({ user, onBack }) {
                   <button
                     onClick={() => handleDisconnect('google')}
                     className="w-full py-2 text-xs transition-all opacity-60 hover:opacity-100"
-                    style={{ color: '#EF4444', textDecoration: 'underline', background: 'none', border: 'none' }}
+                    style={{
+                      color: '#EF4444',
+                      textDecoration: 'underline',
+                      background: 'none',
+                      border: 'none'
+                    }}
                   >
                     구글 캘린더 연동 해제하기
                   </button>
@@ -391,7 +423,13 @@ export function Settings({ user, onBack }) {
 
               {calendarConnected && calendarTags.length > 0 && (
                 <div>
-                  <small style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '10px' }}>
+                  <small
+                    style={{
+                      color: 'var(--text-secondary)',
+                      display: 'block',
+                      marginBottom: '10px'
+                    }}
+                  >
                     동기화된 캘린더
                   </small>
                   <div className="flex flex-wrap gap-2">
@@ -418,7 +456,15 @@ export function Settings({ user, onBack }) {
         </div>
 
         <div className="mb-4 px-1">
-          <h2 style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+          <h2
+            style={{
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              fontWeight: '600',
+              letterSpacing: '0.5px',
+              textTransform: 'uppercase'
+            }}
+          >
             메모 연결
           </h2>
         </div>
@@ -434,7 +480,9 @@ export function Settings({ user, onBack }) {
             accentColor="#000000"
           >
             <div>
-              <small style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '10px' }}>
+              <small
+                style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '10px' }}
+              >
                 메모 카테고리
               </small>
               <div className="flex flex-wrap gap-2">

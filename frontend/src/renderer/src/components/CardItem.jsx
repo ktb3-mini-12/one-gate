@@ -1,15 +1,5 @@
 import React from 'react'
-
-const statusConfig = {
-  pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.3)' },
-  analyzed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.3)' },
-  failed: { label: '실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' }
-}
-
-const categoryTypeConfig = {
-  '일정': { color: '#4285F4', bg: 'rgba(66, 133, 244, 0.1)', border: 'rgba(66, 133, 244, 0.2)' },
-  '메모': { color: '#9AA0A6', bg: 'rgba(154, 160, 166, 0.1)', border: 'rgba(154, 160, 166, 0.2)' }
-}
+import { cardStatusConfig as statusConfig, categoryTypeConfig } from '../lib/constants'
 
 export function CardItem({
   id,
@@ -30,9 +20,8 @@ export function CardItem({
   const config = statusConfig[effectiveStatus] || statusConfig.pending
 
   // 실패 시 라벨에 원인 표시
-  const statusLabel = effectiveStatus === 'failed' && failReason
-    ? `${config.label} (${failReason})`
-    : config.label
+  const statusLabel =
+    effectiveStatus === 'failed' && failReason ? `${config.label} (${failReason})` : config.label
   const typeConfig = categoryTypeConfig[categoryType] || categoryTypeConfig['메모']
 
   return (
@@ -43,9 +32,7 @@ export function CardItem({
         background: isSelected
           ? 'linear-gradient(180deg, var(--surface-elevated) 0%, var(--surface-primary) 100%)'
           : 'linear-gradient(180deg, var(--surface-primary) 0%, var(--surface-secondary) 100%)',
-        border: isSelected
-          ? '1px solid var(--action-primary)'
-          : '1px solid var(--divider)',
+        border: isSelected ? '1px solid var(--action-primary)' : '1px solid var(--divider)',
         boxShadow: isSelected ? 'var(--shadow-glow-blue)' : 'var(--shadow-sm)',
         transform: 'translateY(0)'
       }}
@@ -74,16 +61,21 @@ export function CardItem({
               onSelect?.(id)
             }}
             style={{
-              background: isSelected
-                ? 'var(--action-primary)'
-                : 'var(--surface-gradient-top)',
+              background: isSelected ? 'var(--action-primary)' : 'var(--surface-gradient-top)',
               border: isSelected
                 ? '1px solid var(--action-primary)'
                 : '1px solid var(--divider-light)'
             }}
           >
             {isSelected && (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#fff"
+                strokeWidth="3"
+              >
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             )}

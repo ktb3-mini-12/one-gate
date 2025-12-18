@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @source "../**/*.{js,jsx}";
 @source "../../index.html";
@@ -7,36 +7,36 @@
   /* OneGate Premium Design System */
 
   /* Background */
-  --app-bg: #18191B;
+  --app-bg: #18191b;
 
   /* Surfaces */
-  --surface-primary: #1E1F23;
+  --surface-primary: #1e1f23;
   --surface-secondary: #232528;
-  --surface-gradient-top: #282A2E;
-  --surface-elevated: #2D2F33;
+  --surface-gradient-top: #282a2e;
+  --surface-elevated: #2d2f33;
 
   /* Dividers */
-  --divider: #2E3035;
-  --divider-light: #383A40;
+  --divider: #2e3035;
+  --divider-light: #383a40;
 
   /* Text */
-  --text-primary: #E8EAED;
-  --text-secondary: #9AA0A6;
-  --text-tertiary: #6B7280;
+  --text-primary: #e8eaed;
+  --text-secondary: #9aa0a6;
+  --text-tertiary: #6b7280;
 
   /* Accent Colors */
-  --action-primary: #3B82F6;
-  --action-primary-hover: #2563EB;
-  --action-secondary: #6366F1;
+  --action-primary: #3b82f6;
+  --action-primary-hover: #2563eb;
+  --action-secondary: #6366f1;
 
   /* Status Colors */
-  --status-analyzing: #F59E0B;
-  --status-temporary: #6B7280;
-  --status-completed: #10B981;
-  --status-error: #EF4444;
+  --status-analyzing: #f59e0b;
+  --status-temporary: #6b7280;
+  --status-completed: #10b981;
+  --status-error: #ef4444;
 
   /* Service Colors */
-  --google-blue: #4285F4;
+  --google-blue: #4285f4;
   --notion-black: #191919;
 
   /* Shadows - More dramatic for premium feel */
@@ -163,16 +163,19 @@ button:active {
 }
 
 /* Input Styles */
-input, textarea {
+input,
+textarea {
   font-family: inherit;
   color: var(--text-primary);
 }
 
-input::placeholder, textarea::placeholder {
+input::placeholder,
+textarea::placeholder {
   color: var(--text-tertiary);
 }
 
-input:focus, textarea:focus {
+input:focus,
+textarea:focus {
   outline: none;
 }
 
@@ -195,7 +198,8 @@ input:focus, textarea:focus {
 
 /* Pulse */
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
   }
   50% {

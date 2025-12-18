@@ -150,7 +150,7 @@ function handleAuthCallback(url) {
             refresh_token: refreshToken,
             provider_token: providerToken
           })
-          
+
           // [수정 포인트] 리액트 창에 데이터 갱신 신호를 보냅니다.
           // 이 신호가 있어야 Settings.jsx의 useEffect 리스너가 작동합니다.
           setTimeout(() => {

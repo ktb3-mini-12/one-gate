@@ -460,13 +460,7 @@ export function Home({ user, session, onNavigateToSettings }) {
   return (
     <div className="min-h-full p-8 pb-16" style={{ background: 'var(--app-bg)' }}>
       {/* Toast */}
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
       {/* Header */}
       <div className="max-w-6xl mx-auto mb-8">
@@ -487,18 +481,31 @@ export function Home({ user, session, onNavigateToSettings }) {
 
           <div className="flex items-center gap-4">
             {/* SSE Connection Status */}
-            <div className="flex items-center gap-1.5" title={
-              sseStatus === 'connected' ? '실시간 연결됨' :
-              sseStatus === 'connecting' ? '연결 중...' : '연결 끊김'
-            }>
+            <div
+              className="flex items-center gap-1.5"
+              title={
+                sseStatus === 'connected'
+                  ? '실시간 연결됨'
+                  : sseStatus === 'connecting'
+                    ? '연결 중...'
+                    : '연결 끊김'
+              }
+            >
               <div
                 className={`w-2 h-2 rounded-full ${sseStatus === 'connecting' ? 'animate-pulse' : ''}`}
                 style={{
-                  background: sseStatus === 'connected' ? '#10B981' :
-                             sseStatus === 'connecting' ? '#F59E0B' : '#EF4444',
-                  boxShadow: sseStatus === 'connected' ? '0 0 6px rgba(16, 185, 129, 0.5)' :
-                            sseStatus === 'connecting' ? '0 0 6px rgba(245, 158, 11, 0.5)' :
-                            '0 0 6px rgba(239, 68, 68, 0.5)'
+                  background:
+                    sseStatus === 'connected'
+                      ? '#10B981'
+                      : sseStatus === 'connecting'
+                        ? '#F59E0B'
+                        : '#EF4444',
+                  boxShadow:
+                    sseStatus === 'connected'
+                      ? '0 0 6px rgba(16, 185, 129, 0.5)'
+                      : sseStatus === 'connecting'
+                        ? '0 0 6px rgba(245, 158, 11, 0.5)'
+                        : '0 0 6px rgba(239, 68, 68, 0.5)'
                 }}
               />
             </div>
@@ -554,9 +561,8 @@ export function Home({ user, session, onNavigateToSettings }) {
                   fontSize: '16px',
                   fontWeight: activeTab === tab ? '600' : '500',
                   color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  borderBottom: activeTab === tab
-                    ? '2px solid var(--action-primary)'
-                    : '2px solid transparent'
+                  borderBottom:
+                    activeTab === tab ? '2px solid var(--action-primary)' : '2px solid transparent'
                 }}
               >
                 {tab}
@@ -572,7 +578,8 @@ export function Home({ user, session, onNavigateToSettings }) {
                   disabled={selectedCards.size === 0 || isUploading}
                   className="px-5 py-2 rounded-xl transition-all disabled:opacity-40"
                   style={{
-                    background: 'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
+                    background:
+                      'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
                     color: '#FFFFFF',
                     fontWeight: '500',
                     fontSize: '14px'
@@ -620,7 +627,10 @@ export function Home({ user, session, onNavigateToSettings }) {
             <div className="flex justify-center mb-4">
               <div
                 className="w-8 h-8 rounded-full animate-spin"
-                style={{ border: '2px solid var(--divider)', borderTopColor: 'var(--action-primary)' }}
+                style={{
+                  border: '2px solid var(--divider)',
+                  borderTopColor: 'var(--action-primary)'
+                }}
               />
             </div>
             <div>로딩 중...</div>
