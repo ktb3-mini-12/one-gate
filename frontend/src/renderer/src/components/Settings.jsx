@@ -194,7 +194,7 @@ export function Settings({ user, onBack }) {
   }
 
   const handleAddMemoTag = async () => {
-    if (!newMemoTagName.trim()) return
+    if (!newMemoTagName.trim() || !user?.id) return
 
     const categoryName = newMemoTagName.trim()
     const tempId = `temp-${Date.now()}`
@@ -204,7 +204,7 @@ export function Settings({ user, onBack }) {
     setIsAddingMemoTag(false)
 
     try {
-      const res = await api.post('/categories', { name: categoryName, type: 'MEMO' })
+      const res = await api.post(`/categories?user_id=${user.id}`, { name: categoryName, type: 'MEMO' })
       if (res.data.data) {
         setMemoTags((prev) =>
           prev.map((cat) => (cat.id === tempId ? { ...cat, id: res.data.data.id } : cat))
