@@ -2,7 +2,8 @@
 export const cardStatusConfig = {
   pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.3)' },
   analyzed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.3)' },
-  failed: { label: '실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' }
+  failed: { label: '실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' },
+  analysis_failed: { label: '분석 실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' }
 }
 
 // CardDetail용 상태 설정 (상세 모달에서 사용)
@@ -10,7 +11,8 @@ export const detailStatusConfig = {
   pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.4)' },
   analyzed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.4)' },
   completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.4)' },
-  failed: { label: '실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' }
+  failed: { label: '실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' },
+  analysis_failed: { label: '분석 실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' }
 }
 
 // 카테고리 타입 설정 (공용)

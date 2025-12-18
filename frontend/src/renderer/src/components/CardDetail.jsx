@@ -66,9 +66,13 @@ export function CardDetail({
     effectiveStatus === 'failed' && failReason ? `${config.label} (${failReason})` : config.label
 
   const isTemporary = status === 'analyzed'
-  const isCalendar = rawData?.type === 'CALENDAR'
   const analysis = rawData?.result || {}
+  // result.analysis_failed가 true이거나 status가 analysis_failed이면 분석 실패
+  const isAnalysisFailed = analysis.analysis_failed === true || status === 'analysis_failed'
+  const isCalendar = rawData?.type === 'CALENDAR'
   const originalText = rawData?.text || ''
+  const imageUrl = rawData?.image_url
+  const errorMessage = isAnalysisFailed ? (analysis.error || 'AI 분석에 실패했습니다') : null
 
   // 초기값 설정
   const initialBody =
@@ -223,6 +227,29 @@ export function CardDetail({
 
           {/* Content */}
           <div className="px-6 pb-6">
+            {/* 첨부 이미지 */}
+            {imageUrl && !imageUrl.startsWith('data:') && (
+              <div className="mb-4">
+                <label className="block text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                  첨부 이미지
+                </label>
+                <div
+                  className="rounded-xl overflow-hidden"
+                  style={{
+                    background: 'var(--surface-secondary)',
+                    border: '1px solid var(--divider)'
+                  }}
+                >
+                  <img
+                    src={imageUrl}
+                    alt="첨부 이미지"
+                    className="w-full object-contain"
+                    style={{ maxHeight: '200px' }}
+                  />
+                </div>
+              </div>
+            )}
+
             {/* 원본 (수정 불가) */}
             {originalText && (
               <div
@@ -431,13 +458,30 @@ export function CardDetail({
               </div>
             )}
 
+            {/* Analysis Failed Error */}
+            {isAnalysisFailed && (
+              <div
+                className="mb-4 px-4 py-3 rounded-xl text-sm"
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#EF4444'
+                }}
+              >
+                <div className="font-medium mb-1">AI 분석 실패</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
+                  {errorMessage}
+                </div>
+              </div>
+            )}
+
             {/* Actions - pending 상태에서는 버튼 숨김 */}
             {status !== 'pending' && (
               <div className="flex gap-3">
                 <button
                   onClick={handleDeleteClick}
                   disabled={isUploading}
-                  className="flex-1 py-3 rounded-2xl transition-all hover:opacity-80 disabled:opacity-50"
+                  className={`${isAnalysisFailed ? 'w-full' : 'flex-1'} py-3 rounded-2xl transition-all hover:opacity-80 disabled:opacity-50`}
                   style={{
                     background: 'var(--surface-gradient-top)',
                     color: 'var(--text-secondary)',
@@ -449,34 +493,37 @@ export function CardDetail({
                   삭제
                 </button>
 
-                <button
-                  onClick={handleUploadClick}
-                  disabled={isUploading}
-                  className="flex-1 py-3 rounded-2xl transition-all hover:opacity-90 disabled:opacity-70 flex items-center justify-center gap-2"
-                  style={{
-                    background:
-                      'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
-                    color: '#fff',
-                    fontWeight: '500',
-                    fontSize: '14px',
-                    boxShadow: 'var(--shadow-glow-blue)'
-                  }}
-                >
-                  {isUploading ? (
-                    <>
-                      <div
-                        className="w-4 h-4 rounded-full animate-spin"
-                        style={{
-                          border: '2px solid rgba(255,255,255,0.3)',
-                          borderTopColor: '#fff'
-                        }}
-                      />
-                      <span>업로드 중...</span>
-                    </>
-                  ) : (
-                    '업로드'
-                  )}
-                </button>
+                {/* 분석 실패 상태에서는 업로드 버튼 숨김 */}
+                {!isAnalysisFailed && (
+                  <button
+                    onClick={handleUploadClick}
+                    disabled={isUploading}
+                    className="flex-1 py-3 rounded-2xl transition-all hover:opacity-90 disabled:opacity-70 flex items-center justify-center gap-2"
+                    style={{
+                      background:
+                        'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
+                      color: '#fff',
+                      fontWeight: '500',
+                      fontSize: '14px',
+                      boxShadow: 'var(--shadow-glow-blue)'
+                    }}
+                  >
+                    {isUploading ? (
+                      <>
+                        <div
+                          className="w-4 h-4 rounded-full animate-spin"
+                          style={{
+                            border: '2px solid rgba(255,255,255,0.3)',
+                            borderTopColor: '#fff'
+                          }}
+                        />
+                        <span>업로드 중...</span>
+                      </>
+                    ) : (
+                      '업로드'
+                    )}
+                  </button>
+                )}
               </div>
             )}
           </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { api } from './lib/api'
+import axios from 'axios'
+import { API_BASE_URL } from './lib/api'
 const { ipcRenderer } = window.require('electron')
 
 function MiniInput({ user }) {
@@ -110,7 +111,7 @@ function MiniInput({ user }) {
       if (queryText) formData.append('text', queryText)
       if (imageFile) formData.append('image', imageFile)
 
-      await axios.post('http://localhost:8000/analyze', formData, {
+      await axios.post(`${API_BASE_URL}/analyze`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
 

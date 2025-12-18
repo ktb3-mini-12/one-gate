@@ -13,7 +13,8 @@ export function CardItem({
   onSelect,
   onClick,
   uploadFailed,
-  failReason
+  failReason,
+  imageUrl
 }) {
   // 업로드 실패 시 failed 상태로 표시
   const effectiveStatus = uploadFailed ? 'failed' : status
@@ -96,6 +97,22 @@ export function CardItem({
           {categoryType}
         </span>
       </div>
+
+      {/* Image Preview */}
+      {imageUrl && !imageUrl.startsWith('data:') && (
+        <div className="mb-3 rounded-xl overflow-hidden" style={{ maxHeight: '120px' }}>
+          <img
+            src={imageUrl}
+            alt="첨부 이미지"
+            className="w-full h-full object-cover"
+            style={{
+              maxHeight: '120px',
+              borderRadius: '12px',
+              border: '1px solid var(--divider)'
+            }}
+          />
+        </div>
+      )}
 
       {/* Content */}
       <div className={`mb-4 ${showCheckbox ? 'pr-8' : ''}`}>

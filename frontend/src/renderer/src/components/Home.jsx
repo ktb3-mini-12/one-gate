@@ -35,12 +35,16 @@ export function Home({ user, session, onNavigateToSettings }) {
         const transformedCards = (res.data?.data || []).map((record) => {
           const createdAt = record.created_at ? new Date(record.created_at) : null
 
+          // result.analysis_failed가 true이면 분석 실패 상태
+          const isAnalysisFailed = record.result?.analysis_failed === true
+          const status = isAnalysisFailed ? 'analysis_failed' : (record.status?.toLowerCase() || 'pending')
+
           return {
             id: String(record.id),
-            summary: record.result?.summary || record.text,
+            summary: isAnalysisFailed ? (record.text || '분석 실패') : (record.result?.summary || record.text),
             category: record.category?.name || 'general',
             date: createdAt ? createdAt.toLocaleDateString('ko-KR') : '',
-            status: record.status?.toLowerCase() || 'pending',
+            status,
             categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
             rawData: record
           }
@@ -132,7 +136,7 @@ export function Home({ user, session, onNavigateToSettings }) {
           // 새 카드를 목록 최상단에 추가
           const newCard = {
             id: String(recordId),
-            summary: payload.text || '진행 중...',
+            summary: payload.text || (payload.image_url ? '이미지 분석 중...' : '진행 중...'),
             category: 'general',
             date: payload.created_at
               ? new Date(payload.created_at).toLocaleDateString('ko-KR')
@@ -144,6 +148,7 @@ export function Home({ user, session, onNavigateToSettings }) {
               status: 'PENDING',
               type: payload.type || 'MEMO',
               text: payload.text,
+              image_url: payload.image_url,
               created_at: payload.created_at
             }
           }
@@ -163,6 +168,33 @@ export function Home({ user, session, onNavigateToSettings }) {
           applyRecordEvent(JSON.parse(evt.data))
         } catch (e) {
           console.error('SSE parse error:', e)
+        }
+      })
+
+      // analysis_failed: AI 분석 실패 시 상태 업데이트
+      es.addEventListener('analysis_failed', (evt) => {
+        try {
+          const payload = JSON.parse(evt.data)
+          const recordId = payload?.record_id
+          if (!recordId) return
+
+          setCards((prev) =>
+            prev.map((card) => {
+              if (card.id !== String(recordId)) return card
+
+              return {
+                ...card,
+                status: 'analysis_failed',
+                summary: card.rawData?.text || '분석 실패',
+                rawData: {
+                  ...card.rawData,
+                  result: { error: payload.error, analysis_failed: true }
+                }
+              }
+            })
+          )
+        } catch (e) {
+          console.error('SSE analysis_failed parse error:', e)
         }
       })
 
@@ -663,6 +695,7 @@ export function Home({ user, session, onNavigateToSettings }) {
                 onClick={handleCardClick}
                 uploadFailed={failedCards.has(card.id)}
                 failReason={failedCards.get(card.id)}
+                imageUrl={card.rawData?.image_url}
               />
             ))}
           </div>

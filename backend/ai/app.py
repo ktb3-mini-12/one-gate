@@ -12,17 +12,26 @@ Gemini 기반 입력 분석 서비스 (텍스트 / 이미지 / PDF)
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
 import re
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
+
+# Pillow for image preprocessing
+try:
+    from PIL import Image
+    PILLOW_AVAILABLE = True
+except ImportError:
+    PILLOW_AVAILABLE = False
+    Image = None
 
 # google-genai 패키지 import (설치 필요: pip install google-genai)
 try:
@@ -166,6 +175,71 @@ def _guess_image_mime(upload: UploadFile) -> str:
     return "image/jpeg"
 
 
+def _preprocess_image(
+    image_bytes: bytes,
+    max_size: int = 1024,
+    quality: int = 85
+) -> Tuple[bytes, str]:
+    """
+    Pillow를 사용한 이미지 전처리.
+
+    - 큰 이미지를 max_size로 리사이즈 (비율 유지)
+    - RGBA → RGB 변환 (JPEG 호환)
+    - JPEG로 압축하여 용량 최적화
+
+    Args:
+        image_bytes: 원본 이미지 바이트
+        max_size: 최대 가로/세로 픽셀 (기본: 1024)
+        quality: JPEG 압축 품질 (기본: 85)
+
+    Returns:
+        (processed_bytes, mime_type) 튜플
+    """
+    if not PILLOW_AVAILABLE:
+        logger.warning("Pillow가 설치되지 않아 이미지 전처리를 건너뜁니다.")
+        return image_bytes, "image/jpeg"
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        original_size = img.size
+        original_format = img.format or "UNKNOWN"
+
+        # RGBA/P 모드 → RGB 변환 (JPEG는 알파 채널 미지원)
+        if img.mode in ("RGBA", "P"):
+            # 알파 채널이 있으면 흰색 배경으로 합성
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        # 리사이즈 (비율 유지, 큰 이미지만)
+        if max(img.size) > max_size:
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            logger.info(f"이미지 리사이즈: {original_size} → {img.size}")
+
+        # JPEG로 압축
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=quality, optimize=True)
+        processed_bytes = output.getvalue()
+
+        # 로그
+        original_kb = len(image_bytes) / 1024
+        processed_kb = len(processed_bytes) / 1024
+        logger.info(
+            f"이미지 전처리 완료: {original_format} → JPEG, "
+            f"{original_kb:.1f}KB → {processed_kb:.1f}KB ({100 * processed_kb / original_kb:.0f}%)"
+        )
+
+        return processed_bytes, "image/jpeg"
+
+    except Exception as e:
+        logger.error(f"이미지 전처리 실패: {e}, 원본 사용")
+        return image_bytes, "image/jpeg"
+
+
 async def _read_upload_bytes(upload: UploadFile) -> bytes:
     data = await upload.read()
     if not data:
@@ -220,6 +294,35 @@ async def analyze_text(text: str) -> dict:
     return _gemini_generate([f"분석할 내용:\n{text.strip()}"], raise_http=False)
 
 
+async def analyze_image_bytes(image_bytes: bytes, mime_type: str, text: Optional[str] = None) -> dict:
+    """
+    이미지 바이트로 AI 분석 수행.
+    main.py의 BackgroundTasks에서 호출됨.
+
+    Args:
+        image_bytes: 이미지 바이트 데이터
+        mime_type: 이미지 MIME 타입 (image/jpeg, image/png 등)
+        text: 추가 텍스트 (선택)
+
+    Returns:
+        dict: AIAnalysisData 형식의 분석 결과
+    """
+    _require_client()
+
+    # Pillow로 이미지 전처리 (리사이즈, 압축, 포맷 통일)
+    processed_bytes, processed_mime = _preprocess_image(image_bytes)
+
+    # Gemini에 이미지 전송
+    image_part = types.Part.from_bytes(data=processed_bytes, mime_type=processed_mime)
+
+    contents = [image_part]
+    if text and text.strip():
+        contents.append(f"추가 설명:\n{text.strip()}")
+    contents.append("이 이미지를 분석해주세요.")
+
+    return _gemini_generate(contents, raise_http=False)
+
+
 def is_ai_available() -> bool:
     """AI 분석 가능 여부 확인"""
     return GENAI_AVAILABLE and client is not None
@@ -252,8 +355,9 @@ async def analyze(
         logger.info(f"파일 수신 - 크기: {len(file_bytes)} bytes")
 
         if type == "image":
-            mime = _guess_image_mime(file)
-            part = types.Part.from_bytes(data=file_bytes, mime_type=mime)
+            # Pillow로 이미지 전처리
+            processed_bytes, processed_mime = _preprocess_image(file_bytes)
+            part = types.Part.from_bytes(data=processed_bytes, mime_type=processed_mime)
             data = _gemini_generate([part, "이 이미지를 분석해주세요."])
         else:
             part = types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")

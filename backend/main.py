@@ -29,14 +29,14 @@ from database import (
 def _load_ai_module():
     """AI 모듈 로드 (라우터 + 서비스 함수)"""
     try:
-        from ai.app import router as ai_router, analyze_text, is_ai_available
-        return ai_router, analyze_text, is_ai_available
+        from ai.app import router as ai_router, analyze_text, analyze_image_bytes, is_ai_available
+        return ai_router, analyze_text, analyze_image_bytes, is_ai_available
     except Exception as e:
         print(f"[AI] 모듈 로드 실패: {e}")
-        return None, None, lambda: False
+        return None, None, None, lambda: False
 
 
-ai_router, ai_analyze_text, ai_is_available = _load_ai_module()
+ai_router, ai_analyze_text, ai_analyze_image_bytes, ai_is_available = _load_ai_module()
 
 app = FastAPI()
 
@@ -219,7 +219,8 @@ _broker = _SseBroker()
 
 def _fallback_analyze(text: str) -> dict:
     """AI 분석 실패 시 키워드 기반 fallback 분류"""
-    text_lower = text.lower()
+    safe_text = text or ""
+    text_lower = safe_text.lower()
 
     # 일정 키워드
     calendar_keywords = [
@@ -233,27 +234,46 @@ def _fallback_analyze(text: str) -> dict:
     is_calendar = any(kw in text_lower for kw in calendar_keywords)
     input_type = "CALENDAR" if is_calendar else "MEMO"
 
+    summary = safe_text[:50] if len(safe_text) > 50 else safe_text
+    if not summary:
+        summary = "이미지 메모" if input_type == "MEMO" else "이미지 일정"
+
     return {
         "type": input_type,
-        "summary": text[:50] if len(text) > 50 else text,
-        "content": text,
+        "summary": summary,
+        "content": safe_text or "(이미지)",
         "category": "일정" if is_calendar else "메모",
     }
 
 
-async def _run_ai_analysis(record_id: int, user_id: str, text: str) -> None:
+async def _run_ai_analysis(
+    record_id: int,
+    user_id: str,
+    text: str,
+    image_bytes: bytes = None,
+    image_mime_type: str = None
+) -> None:
     """
     백그라운드에서 AI 분석을 수행하고 결과를 DB에 저장.
     분석 완료 후 SSE로 클라이언트에 알림.
+    AI 분석 실패 시 ANALYSIS_FAILED 상태로 저장.
     """
     try:
         # AI 모듈이 사용 가능한 경우 Gemini 분석
-        if ai_analyze_text is not None and ai_is_available():
-            print(f"[AI] 레코드 {record_id} Gemini 분석 시작")
-            analysis_result = await ai_analyze_text(text)
+        if ai_is_available():
+            print(f"[AI] 레코드 {record_id} Gemini 분석 시작 (이미지: {'있음' if image_bytes else '없음'})")
+            if image_bytes and ai_analyze_image_bytes is not None:
+                # 이미지가 있으면 이미지 분석
+                analysis_result = await ai_analyze_image_bytes(image_bytes, image_mime_type, text)
+            elif text and ai_analyze_text is not None:
+                # 텍스트만 있으면 텍스트 분석
+                analysis_result = await ai_analyze_text(text)
+            else:
+                # 둘 다 없으면 분석 실패
+                raise ValueError("분석할 텍스트 또는 이미지가 없습니다.")
         else:
-            print(f"[AI] 레코드 {record_id} fallback 분류 사용")
-            analysis_result = _fallback_analyze(text)
+            # AI 모듈이 없으면 분석 실패 처리
+            raise RuntimeError("AI 모듈이 사용 불가능합니다.")
 
         # 분석 결과 검증 및 저장
         validated = AIAnalysisData(**analysis_result)
@@ -274,23 +294,20 @@ async def _run_ai_analysis(record_id: int, user_id: str, text: str) -> None:
         print(f"[AI] 레코드 {record_id} 분석 완료: {validated.type}")
 
     except Exception as e:
-        print(f"[AI] 레코드 {record_id} 분석 실패: {e}, fallback 적용")
+        error_message = str(e)
+        print(f"[AI] 레코드 {record_id} 분석 실패: {error_message}")
 
-        # 에러 발생 시 fallback 분류 적용
-        fallback_result = _fallback_analyze(text)
-        validated = AIAnalysisData(**fallback_result)
-        analysis_payload = validated.model_dump(exclude_none=True)
-
+        # 분석 실패 시 status는 PENDING 유지, result에 error 저장
+        # (DB CHECK 제약조건으로 인해 ANALYSIS_FAILED 사용 불가)
         supabase.table("inputs").update({
-            "status": "ANALYZED",
-            "type": validated.type,
-            "result": analysis_payload,
+            "result": {"error": error_message, "analysis_failed": True},
         }).eq("id", record_id).execute()
 
+        # analysis_failed SSE 이벤트 발행
         await _broker.publish(
             str(user_id),
-            "analysis_completed",
-            {"record_id": record_id, "status": "ANALYZED", "analysis_data": analysis_payload},
+            "analysis_failed",
+            {"record_id": record_id, "error": error_message},
         )
 
 
@@ -309,11 +326,16 @@ async def analyze_content(
     display_text = text[:30] if text else "(이미지만)"
     print(f"[분석] user_id: {user_id}, 내용: {display_text}..., 이미지: {'있음' if image else '없음'}")
 
-    # 이미지 처리 - Supabase Storage에 업로드
+    # 이미지 처리
     image_url = None
+    image_bytes = None
+    image_mime_type = None
+
     if image:
         try:
-            image_content = await image.read()
+            # 이미지 바이트 읽기 (AI 분석용)
+            image_bytes = await image.read()
+            image_mime_type = image.content_type or "image/jpeg"
 
             # 파일명 생성: user_id/timestamp_uuid.확장자
             file_ext = image.filename.split('.')[-1] if '.' in image.filename else 'png'
@@ -322,28 +344,27 @@ async def analyze_content(
             # Supabase Storage에 업로드 (버킷: images)
             storage_response = supabase.storage.from_('images').upload(
                 path=file_name,
-                file=image_content,
-                file_options={"content-type": image.content_type}
+                file=image_bytes,
+                file_options={"content-type": image_mime_type}
             )
 
-            # 공개 URL 생성
+            # 공개 URL 생성 (DB 저장용)
             image_url = supabase.storage.from_('images').get_public_url(file_name)
             print(f"[분석] 이미지 업로드 완료: {image_url}")
 
         except Exception as e:
             print(f"[분석] 이미지 업로드 오류: {e}")
-            # 업로드 실패 시 base64 폴백
-            try:
-                await image.seek(0)
-                image_content = await image.read()
-                image_base64 = base64.b64encode(image_content).decode('utf-8')
-                image_url = f"data:{image.content_type};base64,{image_base64}"
-                print(f"[분석] base64 폴백 사용")
-            except Exception as e2:
-                print(f"[분석] base64 폴백도 실패: {e2}")
+            # 업로드 실패해도 AI 분석은 진행 (image_bytes는 이미 있음)
+            if not image_bytes:
+                try:
+                    await image.seek(0)
+                    image_bytes = await image.read()
+                    image_mime_type = image.content_type or "image/jpeg"
+                except Exception as e2:
+                    print(f"[분석] 이미지 읽기 실패: {e2}")
 
     # 텍스트 또는 이미지가 없으면 에러
-    if not text and not image_url:
+    if not text and not image_bytes:
         raise HTTPException(status_code=400, detail="텍스트 또는 이미지가 필요합니다")
 
     # 초기 타입은 키워드 기반으로 추정 (AI 분석 후 변경될 수 있음)
@@ -370,13 +391,14 @@ async def analyze_content(
 
         # record_created SSE 이벤트 즉시 발행
         await _broker.publish(
-            request.user_id,
+            user_id,
             "record_created",
             {
                 "record_id": record_id,
                 "status": "PENDING",
                 "type": input_type,
-                "text": request.text,
+                "text": text,
+                "image_url": image_url,
                 "created_at": record.get("created_at"),
             },
         )
@@ -385,8 +407,10 @@ async def analyze_content(
         background_tasks.add_task(
             _run_ai_analysis,
             record_id,
-            request.user_id,
-            request.text,
+            user_id,
+            text,
+            image_bytes,
+            image_mime_type,
         )
 
         return {
@@ -395,7 +419,8 @@ async def analyze_content(
                 "id": record_id,
                 "type": input_type,
                 "text": text,
-                "has_image": image_url is not None,
+                "has_image": image_bytes is not None,
+                "image_url": image_url,
                 "status": "PENDING",
                 "created_at": record.get("created_at"),
             },
