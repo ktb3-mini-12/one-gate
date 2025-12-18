@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Literal, Optional, Tuple
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
 
