@@ -686,8 +686,16 @@ export function Home({ user, session, onNavigateToSettings }) {
         isDanger={true}
       />
 
-      {/* Animation styles */}
+      {/* Hide scrollbar */}
       <style>{`
+        ::-webkit-scrollbar {
+          display: none;
+        }
+        html, body {
+          overflow: hidden;
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
         @keyframes slide-down {
           from {
             opacity: 0;
