@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
-import { API_BASE_URL } from './lib/api'
+import { api, API_BASE_URL } from './lib/api'
 const { ipcRenderer } = window.require('electron')
 
 function MiniInput({ user }) {
@@ -9,6 +9,8 @@ function MiniInput({ user }) {
   const [loading, setLoading] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [isFocused, setIsFocused] = useState(false)
+  const [memoCategories, setMemoCategories] = useState([])
+  const [calendarCategories, setCalendarCategories] = useState([])
   const inputRef = useRef(null)
   const containerRef = useRef(null)
 
@@ -16,6 +18,31 @@ function MiniInput({ user }) {
     document.body.style.background = 'transparent'
     document.documentElement.style.background = 'transparent'
   }, [])
+
+  // 카테고리 목록 로드
+  useEffect(() => {
+    if (!user?.id) return
+
+    const fetchCategories = async () => {
+      try {
+        const [memoRes, calendarRes] = await Promise.all([
+          api.get('/categories', { params: { type: 'MEMO', user_id: user.id } }),
+          api.get('/categories', { params: { type: 'CALENDAR', user_id: user.id } })
+        ])
+
+        if (memoRes.data?.status === 'success') {
+          setMemoCategories((memoRes.data.data || []).map((c) => c.name))
+        }
+        if (calendarRes.data?.status === 'success') {
+          setCalendarCategories((calendarRes.data.data || []).map((c) => c.name))
+        }
+      } catch (err) {
+        console.error('카테고리 로드 실패:', err)
+      }
+    }
+
+    fetchCategories()
+  }, [user?.id])
 
   // 창 크기 동적 조절
   useEffect(() => {
@@ -110,6 +137,8 @@ function MiniInput({ user }) {
       formData.append('user_id', user.id)
       if (queryText) formData.append('text', queryText)
       if (imageFile) formData.append('image', imageFile)
+      formData.append('memo_categories', JSON.stringify(memoCategories))
+      formData.append('calendar_categories', JSON.stringify(calendarCategories))
 
       await axios.post(`${API_BASE_URL}/records/analyze`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
