@@ -47,12 +47,16 @@ async def analyze_content(
     background_tasks: BackgroundTasks,
     user_id: str = Form(...),
     text: Optional[str] = Form(None),
-    image: Optional[UploadFile] = File(None)
+    image: Optional[UploadFile] = File(None),
+    memo_categories: Optional[str] = Form(None),
+    calendar_categories: Optional[str] = Form(None),
 ):
     """
     Analyze text and/or image content.
 
     - Accepts FormData with user_id, text (optional), and image (optional)
+    - memo_categories: JSON string array of user's MEMO categories
+    - calendar_categories: JSON string array of user's CALENDAR categories
     - Uploads image to Supabase Storage
     - Saves record with PENDING status
     - Publishes record_created SSE event immediately
@@ -149,6 +153,8 @@ async def analyze_content(
             text,
             image_bytes,
             image_mime_type,
+            memo_categories,
+            calendar_categories,
         )
 
         return {

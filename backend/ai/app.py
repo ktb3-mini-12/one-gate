@@ -395,10 +395,19 @@ def _gemini_generate(contents: list, raise_http: bool = True) -> dict:
 
 
 # ============ Service Functions (내부 호출용) ============
-async def analyze_text(text: str) -> dict:
+async def analyze_text(
+    text: str,
+    memo_categories: str = None,
+    calendar_categories: str = None,
+) -> dict:
     """
     내부 호출용 AI 분석 함수.
     main.py의 BackgroundTasks에서 호출됨.
+
+    Args:
+        text: 분석할 텍스트
+        memo_categories: JSON string array of user's MEMO categories
+        calendar_categories: JSON string array of user's CALENDAR categories
 
     Returns:
         dict: AIAnalysisData 형식의 분석 결과
@@ -407,10 +416,18 @@ async def analyze_text(text: str) -> dict:
     """
     if not text or not text.strip():
         raise ValueError("분석할 텍스트가 비어있습니다.")
+
+    # TODO: memo_categories, calendar_categories를 프롬프트에 활용
     return _gemini_generate([f"분석할 내용:\n{text.strip()}"], raise_http=False)
 
 
-async def analyze_image_bytes(image_bytes: bytes, mime_type: str, text: Optional[str] = None) -> dict:
+async def analyze_image_bytes(
+    image_bytes: bytes,
+    mime_type: str,
+    text: Optional[str] = None,
+    memo_categories: str = None,
+    calendar_categories: str = None,
+) -> dict:
     """
     이미지 바이트로 AI 분석 수행.
     main.py의 BackgroundTasks에서 호출됨.
@@ -419,6 +436,8 @@ async def analyze_image_bytes(image_bytes: bytes, mime_type: str, text: Optional
         image_bytes: 이미지 바이트 데이터
         mime_type: 이미지 MIME 타입 (image/jpeg, image/png 등)
         text: 추가 텍스트 (선택)
+        memo_categories: JSON string array of user's MEMO categories
+        calendar_categories: JSON string array of user's CALENDAR categories
 
     Returns:
         dict: AIAnalysisData 형식의 분석 결과
@@ -436,6 +455,7 @@ async def analyze_image_bytes(image_bytes: bytes, mime_type: str, text: Optional
         contents.append(f"추가 설명:\n{text.strip()}")
     contents.append("이 이미지를 분석해주세요.")
 
+    # TODO: memo_categories, calendar_categories를 프롬프트에 활용
     return _gemini_generate(contents, raise_http=False)
 
 

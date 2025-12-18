@@ -78,11 +78,17 @@ async def _run_ai_analysis(
     user_id: str,
     text: str,
     image_bytes: bytes = None,
-    image_mime_type: str = None
+    image_mime_type: str = None,
+    memo_categories: str = None,
+    calendar_categories: str = None,
 ) -> None:
     """
     Run AI analysis in background and save results to DB.
     Notify client via SSE when analysis is complete.
+
+    Args:
+        memo_categories: JSON string array of user's MEMO categories
+        calendar_categories: JSON string array of user's CALENDAR categories
 
     Logic:
     1. Perform AI analysis
@@ -102,9 +108,17 @@ async def _run_ai_analysis(
 
         # Step 2: Perform AI analysis
         if image_bytes and ai_analyze_image_bytes is not None:
-            analysis_result = await ai_analyze_image_bytes(image_bytes, image_mime_type, text)
+            analysis_result = await ai_analyze_image_bytes(
+                image_bytes, image_mime_type, text,
+                memo_categories=memo_categories,
+                calendar_categories=calendar_categories,
+            )
         elif text and ai_analyze_text is not None:
-            analysis_result = await ai_analyze_text(text)
+            analysis_result = await ai_analyze_text(
+                text,
+                memo_categories=memo_categories,
+                calendar_categories=calendar_categories,
+            )
         else:
             raise ValueError("분석할 텍스트 또는 이미지가 없습니다.")
 
