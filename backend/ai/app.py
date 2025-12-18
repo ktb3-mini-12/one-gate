@@ -1,32 +1,33 @@
-"""
-ai/app.py
-
-Gemini 기반 입력 분석 서비스 (텍스트 / 이미지 / PDF)
-- 'schedule' 또는 'memo' JSON을 반환
-- 실행: uvicorn ai.app:app --reload
-
-환경변수:
-- GOOGLE_API_KEY (필수)
-- GEMINI_MODEL (선택, 기본: gemini-2.0-flash)
-"""
-
-from __future__ import annotations
-
+import io
 import json
 import logging
 import os
 import re
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
 
-from google import genai
-from google.genai import types
+# Pillow for image preprocessing
+try:
+    from PIL import Image
+    PILLOW_AVAILABLE = True
+except ImportError:
+    PILLOW_AVAILABLE = False
+    Image = None
+
+# google-genai 패키지 import (설치 필요: pip install google-genai)
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    genai = None
+    types = None
 
 load_dotenv(override=True)
 
@@ -38,9 +39,13 @@ KST = ZoneInfo("Asia/Seoul")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 API_KEY = os.getenv("GOOGLE_API_KEY")
-client: Optional[genai.Client] = genai.Client(api_key=API_KEY) if API_KEY else None
+client = None
 
-if not API_KEY:
+if GENAI_AVAILABLE and API_KEY:
+    client = genai.Client(api_key=API_KEY)
+elif not GENAI_AVAILABLE:
+    logger.warning("google-genai 패키지가 설치되지 않았습니다. pip install google-genai")
+elif not API_KEY:
     logger.warning("GOOGLE_API_KEY가 설정되지 않았습니다.")
 
 
@@ -94,181 +99,185 @@ class AnalyzeResponse(BaseModel):
     data: dict
 
 
-class HealthResponse(BaseModel):
-    status: str
-    has_api_key: bool
-    model: str
-
-
-# ============ FastAPI App ============
-app = FastAPI(
-    title="AI Analyzer (Gemini)",
-    description="텍스트/이미지/PDF를 분석하여 일정 또는 메모로 분류",
-    version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ============ APIRouter ============
+router = APIRouter(prefix="/ai", tags=["AI"])
 
 
 # ============ Prompt ============
-
-ANALYSIS_PROMPT = """당신은 입력된 내용을 분석하여 'CALENDAR(일정)' 또는 'MEMO(메모)'로 분류하는 AI입니다.
-
-## 분류 기준:
-- **CALENDAR**: 특정 시간에 일어나는 일정, 약속, 미팅 등 (시간 정보가 명확한 경우)
-- **MEMO**: 할 일, 아이디어, 메모, 사진 등 (시간 정보가 없거나 불명확한 경우)
-
-## 출력 형식 (반드시 JSON만 출력):
-
-### CALENDAR인 경우:
-```json
-{{
-  "type": "CALENDAR",
-  "summary": "민수와 홍대 저녁 약속",
-  "content": "원본 입력 내용",
-  "category": "약속",
-  "start_time": "2025-12-19T19:00:00+09:00",
-  "end_time": "2025-12-19T21:00:00+09:00",
-  "all_day": false,
-  "location": "홍대",
-  "attendees": ["민수"],
-  "recurrence": null,
-  "meeting_url": null,
-  "body": null,
-  "due_date": null,
-  "memo_status": null
-}}
-```
-
-### MEMO인 경우:
-```json
-{{
-  "type": "MEMO",
-  "summary": "발표자료 제작",
-  "content": "원본 입력 내용",
-  "category": "할 일",
-  "start_time": null,
-  "end_time": null,
-  "all_day": null,
-  "location": null,
-  "attendees": null,
-  "recurrence": null,
-  "meeting_url": null,
-  "body": "발표자료를 완성해야 한다.",
-  "due_date": "2025-12-19",
-  "memo_status": "시작 전",
-  "confidence": 0.91
-}}
-```
-
-## 필드 설명:
-- **type** (필수): "CALENDAR" 또는 "MEMO"
-- **summary** (필수): 핵심 요약 (30자 이내)
-- **content** (필수): 원본 입력 내용
-- **category** (필수): 아래 정해진 카테고리 목록 중 하나를 반드시 선택
-
-### CALENDAR 전용:
-- **start_time**: ISO 8601 형식 (예: 2025-12-19T19:00:00+09:00)
-- **end_time**: 종료 시간 (없으면 시작 후 2시간으로 설정)
-- **all_day**: 종일 일정 여부
-- **location**: 장소
-- **attendees**: 참석자 목록 (배열)
-- **recurrence**: 반복 규칙 (매일, 매주, 매월 등)
-- **meeting_url**: 화상회의 URL
-
-### MEMO 전용:
-- **body**: 상세 내용 또는 정리된 메모
-- **due_date**: 마감일 (YYYY-MM-DD 형식)
-- **memo_status**: "시작 전", "진행 중", "완료" 중 하나
-- **confidence** (필수): 분류 신뢰도 (0~1 사이)
-
-## 카테고리 규칙 (중요!):
-카테고리는 반드시 아래 목록 중 하나를 선택해야 합니다. 목록에 없는 카테고리는 사용할 수 없습니다.
-
-### CALENDAR 카테고리 목록 (type이 CALENDAR인 경우 아래 중 하나 선택):
-{calendar_categories}
-
-### MEMO 카테고리 목록 (type이 MEMO인 경우 아래 중 하나 선택):
-{memo_categories}
-
-## 주의사항:
-- 오늘 날짜: {today}
-- 시간대는 항상 한국 시간(+09:00) 사용
-- "내일", "다음주" 등 상대 시간은 오늘 기준으로 계산
-- 반드시 유효한 JSON만 출력하세요. 다른 텍스트는 포함하지 마세요."""
+def _load_prompt(filename: str) -> str:
+    """ai 폴더에서 프롬프트 파일을 읽어옵니다."""
+    path = os.path.join(os.path.dirname(__file__), filename)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
 
-# ============ 카테고리 목록 ============
-# 아래 목록에 원하는 카테고리를 추가/수정하세요
-CALENDAR_CATEGORIES = [
-    "여행",  # TODO: 실제 카테고리로 변경
-    "운동",
-    "일상",
-    "약속",
-    "미팅",
-    "회의",
-    "출장",
-]
-
-MEMO_CATEGORIES = [
-    "할 일",  # TODO: 실제 카테고리로 변경
-    "아이디어",
-    "메모",
-]
+ANALYSIS_PROMPT = _load_prompt("analysis_prompt.md")
 
 
 # ============ Helpers ============
-
 def _today_kst_str() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d")
 
 
+def _fix_truncated_json(text: str) -> str:
+    """잘린 JSON을 최대한 복구합니다. 문자열 내 개행도 이스케이프 처리."""
+    if not text:
+        return text
+
+    # 문자열 내부의 실제 개행(\n, \r)을 이스케이프 처리
+    result = []
+    in_string = False
+    escape_next = False
+    i = 0
+
+    while i < len(text):
+        char = text[i]
+
+        if escape_next:
+            result.append(char)
+            escape_next = False
+            i += 1
+            continue
+
+        if char == '\\':
+            result.append(char)
+            escape_next = True
+            i += 1
+            continue
+
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            i += 1
+            continue
+
+        # 문자열 내부에서 실제 개행 문자를 이스케이프
+        if in_string and char in ('\n', '\r'):
+            if char == '\n':
+                result.append('\\n')
+            elif char == '\r':
+                result.append('\\r')
+            i += 1
+            continue
+
+        result.append(char)
+        i += 1
+
+    text = ''.join(result)
+
+    # 문자열이 닫히지 않았으면 " 추가
+    if in_string:
+        text += '"'
+
+    # 괄호 개수 맞추기
+    open_braces = text.count('{') - text.count('}')
+    open_brackets = text.count('[') - text.count(']')
+
+    # 닫는 괄호 추가
+    text += ']' * open_brackets
+    text += '}' * open_braces
+
+    return text
+
+
 def _parse_json_response(text: str) -> dict:
-    """
-    모델이 ```json ...``` 으로 감싸거나, 앞/뒤에 설명을 붙여도 최대한 JSON만 뽑아냅니다.
-    """
+    """모델이 ```json ...``` 으로 감싸거나, 앞/뒤에 설명을 붙여도 최대한 JSON만 뽑아냅니다."""
+    # 1차: ```json...``` 패턴
+    m = re.search(r"```json\s*([\s\S]*?)\s*```", text)
+    if m:
+        json_str = m.group(1)
+    else:
+        # 2차: {...} 또는 {... 패턴
+        m = re.search(r"\{[\s\S]*", text)
+        if m:
+            json_str = m.group(0)
+        else:
+            return {"error": "JSON 파싱 실패", "raw": text}
+
+    # 먼저 그대로 파싱 시도
     try:
-        # ```json ... ```
-        m = re.search(r"```json\s*([\s\S]*?)\s*```", text)
-        if m:
-            return json.loads(m.group(1))
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
 
-        # 첫 { 부터 마지막 } 까지
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            return json.loads(m.group(0))
-
+    # 실패 시 복구 후 재시도 (개행 이스케이프 + 괄호 닫기)
+    fixed = _fix_truncated_json(json_str)
+    try:
+        logger.warning("JSON 복구 적용됨 (개행/괄호 수정)")
+        return json.loads(fixed)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON 복구 실패: {e}")
         return {"error": "JSON 파싱 실패", "raw": text}
-    except Exception:
-        return {"error": "JSON 파싱 실패", "raw": text}
 
 
-def _require_client() -> genai.Client:
+def _require_client():
+    if not GENAI_AVAILABLE:
+        raise HTTPException(
+            status_code=500,
+            detail="google-genai 패키지가 설치되지 않았습니다. pip install google-genai",
+        )
     if client is None:
         raise HTTPException(
             status_code=500,
-            detail="Gemini API 키가 없습니다. GOOGLE_API_KEY 또는 GEMINI_API_KEY를 .env에 설정하세요.",
+            detail="Gemini API 키가 없습니다. GOOGLE_API_KEY를 .env에 설정하세요.",
         )
     return client
 
 
 def _guess_image_mime(upload: UploadFile) -> str:
-    # FastAPI UploadFile.content_type을 최대한 신뢰하되, 없으면 기본값
     ct = (upload.content_type or "").lower()
     if ct.startswith("image/"):
         return ct
-    # fallback: 확장자 기준
     name = (upload.filename or "").lower()
     if name.endswith(".png"):
         return "image/png"
     if name.endswith(".webp"):
         return "image/webp"
     return "image/jpeg"
+
+
+def _preprocess_image(
+    image_bytes: bytes,
+    max_size: int = 1024,
+    quality: int = 85
+) -> Tuple[bytes, str]:
+    """
+    Pillow를 사용한 이미지 전처리.
+    """
+    if not PILLOW_AVAILABLE:
+        logger.warning("Pillow가 설치되지 않아 이미지 전처리를 건너뜁니다.")
+        return image_bytes, "image/jpeg"
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        original_size = img.size
+        original_format = img.format or "UNKNOWN"
+
+        # RGBA/P 모드 → RGB 변환
+        if img.mode in ("RGBA", "P"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        # 리사이즈
+        if max(img.size) > max_size:
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            logger.info(f"이미지 리사이즈: {original_size} → {img.size}")
+
+        # JPEG 압축
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=quality, optimize=True)
+        processed_bytes = output.getvalue()
+
+        logger.info(f"이미지 전처리 완료: {original_format} → JPEG, {len(image_bytes)/1024:.1f}KB → {len(processed_bytes)/1024:.1f}KB")
+        return processed_bytes, "image/jpeg"
+    except Exception as e:
+        logger.error(f"이미지 전처리 실패: {e}, 원본 사용")
+        return image_bytes, "image/jpeg"
 
 
 async def _read_upload_bytes(upload: UploadFile) -> bytes:
@@ -279,16 +288,10 @@ async def _read_upload_bytes(upload: UploadFile) -> bytes:
 
 
 def _build_prompt() -> str:
-    calendar_cats = ", ".join(CALENDAR_CATEGORIES)
-    memo_cats = ", ".join(MEMO_CATEGORIES)
-    return ANALYSIS_PROMPT.format(
-        today=_today_kst_str(),
-        calendar_categories=calendar_cats,
-        memo_categories=memo_cats
-    )
+    return ANALYSIS_PROMPT.format(today=_today_kst_str())
 
 
-def _gemini_generate(contents: list[types.Part | str]) -> dict:
+def _gemini_generate(contents: list, raise_http: bool = True) -> dict:
     """google-genai SDK 호출 (JSON 응답 강제)"""
     c = _require_client()
     prompt = _build_prompt()
@@ -305,26 +308,57 @@ def _gemini_generate(contents: list[types.Part | str]) -> dict:
                 max_output_tokens=1024,
             ),
         )
-        result = _parse_json_response(resp.text or "")
-        logger.info(f"분석 완료 - 타입: {result.get('type', 'unknown')}")
+        raw_text = resp.text or ""
+        logger.info(f"Gemini 원본 응답:\n{raw_text[:2000]}")
+        result = _parse_json_response(raw_text)
+
+        # type 보정
+        valid_types = ("CALENDAR", "MEMO")
+        if result.get("type") not in valid_types:
+            result["type"] = "MEMO"
+
+        logger.info(f"분석 완료 - 타입: {result.get('type')}")
         return result
     except Exception as e:
         logger.error(f"Gemini 호출 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
+        if raise_http:
+            raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
+        raise
 
 
-# ============ API ============
+# ============ Service Functions (내부 호출용) ============
+async def analyze_text(text: str) -> dict:
+    if not text or not text.strip():
+        raise ValueError("분석할 텍스트가 비어있습니다.")
+    return _gemini_generate([f"분석할 내용:\n{text.strip()}"], raise_http=False)
 
+
+async def analyze_image_bytes(image_bytes: bytes, mime_type: str, text: Optional[str] = None) -> dict:
+    _require_client()
+    processed_bytes, processed_mime = _preprocess_image(image_bytes)
+    image_part = types.Part.from_bytes(data=processed_bytes, mime_type=processed_mime)
+    contents = [image_part]
+    if text and text.strip():
+        contents.append(f"추가 설명:\n{text.strip()}")
+    contents.append("이 이미지를 분석해주세요.")
+    return _gemini_generate(contents, raise_http=False)
+
+
+def is_ai_available() -> bool:
+    return GENAI_AVAILABLE and client is not None
+
+
+# ============ API Endpoints ============
 InputType = Literal["text", "image", "pdf"]
 
 
-@app.post("/analyze", response_model=AnalyzeResponse)
+@router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(
     type: InputType = Form(..., description="입력 타입: text, image, pdf"),
     content: Optional[str] = Form(None, description="텍스트 내용 (type=text일 때 필수, image/pdf일 때 선택)"),
     file: Optional[UploadFile] = File(None, description="파일 (type=image/pdf일 때 필수)"),
 ):
-    """입력을 분석하여 일정(schedule) 또는 메모(memo)로 분류
+    """입력을 분석하여 CALENDAR 또는 MEMO로 분류
     
     - type=text: 텍스트만 분석 (content 필수)
     - type=image: 이미지 분석 (file 필수, content 선택 - 있으면 함께 분석)
@@ -346,8 +380,8 @@ async def analyze(
         logger.info(f"파일 수신 - 크기: {len(file_bytes)} bytes")
 
         if type == "image":
-            mime = _guess_image_mime(file)
-            part = types.Part.from_bytes(data=file_bytes, mime_type=mime)
+            processed_bytes, processed_mime = _preprocess_image(file_bytes)
+            part = types.Part.from_bytes(data=processed_bytes, mime_type=processed_mime)
             if content and content.strip():
                 logger.info("이미지 + 텍스트 분석")
                 data = _gemini_generate([
@@ -372,10 +406,28 @@ async def analyze(
     raise HTTPException(status_code=400, detail="지원하지 않는 type입니다. (text/image/pdf)")
 
 
-@app.get("/health")
+@router.get("/health")
 async def health():
     return {
         "status": "ok",
+        "genai_available": GENAI_AVAILABLE,
         "has_api_key": bool(API_KEY),
         "model": MODEL,
     }
+
+
+# ============ FastAPI App (하위 호환 유지) ============
+app = FastAPI(
+    title="AI Analyzer (Gemini)",
+    description="텍스트/이미지/PDF를 분석하여 일정 또는 메모로 분류",
+    version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(router)
