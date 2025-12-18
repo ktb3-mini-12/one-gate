@@ -170,7 +170,7 @@ ANALYSIS_PROMPT = """당신은 입력된 내용을 분석하여 'CALENDAR(일정
 - **type** (필수): "CALENDAR" 또는 "MEMO"
 - **summary** (필수): 핵심 요약 (30자 이내)
 - **content** (필수): 원본 입력 내용
-- **category** (필수): 단일 카테고리 (약속, 회의, 업무, 할 일, 아이디어, 일상 등)
+- **category** (필수): 아래 정해진 카테고리 목록 중 하나를 반드시 선택
 
 ### CALENDAR 전용:
 - **start_time**: ISO 8601 형식 (예: 2025-12-19T19:00:00+09:00)
@@ -187,15 +187,39 @@ ANALYSIS_PROMPT = """당신은 입력된 내용을 분석하여 'CALENDAR(일정
 - **memo_status**: "시작 전", "진행 중", "완료" 중 하나
 - **confidence** (필수): 분류 신뢰도 (0~1 사이)
 
-## 카테고리 예시:
-- CALENDAR: 약속, 회의, 미팅, 병원, 운동, 수업, 여행, 공연, 예약
-- MEMO: 할 일, 아이디어, 영감, 쇼핑, 독서, 일상, 메모, 정보
+## 카테고리 규칙 (중요!):
+카테고리는 반드시 아래 목록 중 하나를 선택해야 합니다. 목록에 없는 카테고리는 사용할 수 없습니다.
+
+### CALENDAR 카테고리 목록 (type이 CALENDAR인 경우 아래 중 하나 선택):
+{calendar_categories}
+
+### MEMO 카테고리 목록 (type이 MEMO인 경우 아래 중 하나 선택):
+{memo_categories}
 
 ## 주의사항:
 - 오늘 날짜: {today}
 - 시간대는 항상 한국 시간(+09:00) 사용
 - "내일", "다음주" 등 상대 시간은 오늘 기준으로 계산
 - 반드시 유효한 JSON만 출력하세요. 다른 텍스트는 포함하지 마세요."""
+
+
+# ============ 카테고리 목록 ============
+# 아래 목록에 원하는 카테고리를 추가/수정하세요
+CALENDAR_CATEGORIES = [
+    "여행",  # TODO: 실제 카테고리로 변경
+    "운동",
+    "일상",
+    "약속",
+    "미팅",
+    "회의",
+    "출장",
+]
+
+MEMO_CATEGORIES = [
+    "할 일",  # TODO: 실제 카테고리로 변경
+    "아이디어",
+    "메모",
+]
 
 
 # ============ Helpers ============
@@ -255,7 +279,13 @@ async def _read_upload_bytes(upload: UploadFile) -> bytes:
 
 
 def _build_prompt() -> str:
-    return ANALYSIS_PROMPT.format(today=_today_kst_str())
+    calendar_cats = ", ".join(CALENDAR_CATEGORIES)
+    memo_cats = ", ".join(MEMO_CATEGORIES)
+    return ANALYSIS_PROMPT.format(
+        today=_today_kst_str(),
+        calendar_categories=calendar_cats,
+        memo_categories=memo_cats
+    )
 
 
 def _gemini_generate(contents: list[types.Part | str]) -> dict:
@@ -291,10 +321,15 @@ InputType = Literal["text", "image", "pdf"]
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(
     type: InputType = Form(..., description="입력 타입: text, image, pdf"),
-    content: Optional[str] = Form(None, description="텍스트 내용 (type=text일 때)"),
-    file: Optional[UploadFile] = File(None, description="파일 (type=image/pdf일 때)"),
+    content: Optional[str] = Form(None, description="텍스트 내용 (type=text일 때 필수, image/pdf일 때 선택)"),
+    file: Optional[UploadFile] = File(None, description="파일 (type=image/pdf일 때 필수)"),
 ):
-    """입력을 분석하여 일정(schedule) 또는 메모(memo)로 분류"""
+    """입력을 분석하여 일정(schedule) 또는 메모(memo)로 분류
+    
+    - type=text: 텍스트만 분석 (content 필수)
+    - type=image: 이미지 분석 (file 필수, content 선택 - 있으면 함께 분석)
+    - type=pdf: PDF 분석 (file 필수, content 선택 - 있으면 함께 분석)
+    """
     logger.info(f"분석 요청 - 타입: {type}")
 
     if type == "text":
@@ -313,10 +348,24 @@ async def analyze(
         if type == "image":
             mime = _guess_image_mime(file)
             part = types.Part.from_bytes(data=file_bytes, mime_type=mime)
-            data = _gemini_generate([part, "이 이미지를 분석해주세요."])
+            if content and content.strip():
+                logger.info("이미지 + 텍스트 분석")
+                data = _gemini_generate([
+                    part,
+                    f"이 이미지와 함께 다음 내용을 분석해주세요:\n{content.strip()}"
+                ])
+            else:
+                data = _gemini_generate([part, "이 이미지를 분석해주세요."])
         else:
             part = types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")
-            data = _gemini_generate([part, "이 PDF 문서를 분석해주세요."])
+            if content and content.strip():
+                logger.info("PDF + 텍스트 분석")
+                data = _gemini_generate([
+                    part,
+                    f"이 PDF 문서와 함께 다음 내용을 분석해주세요:\n{content.strip()}"
+                ])
+            else:
+                data = _gemini_generate([part, "이 PDF 문서를 분석해주세요."])
 
         return AnalyzeResponse(status="success", data=data)
 
