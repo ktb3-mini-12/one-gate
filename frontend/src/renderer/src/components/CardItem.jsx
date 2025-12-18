@@ -1,8 +1,11 @@
 import React from 'react'
 
 const statusConfig = {
-  pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.3)' },
-  completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.3)' }
+  pending: { label: '분석 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.3)' },
+  pending_stale: { label: '분석 지연', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.3)' },
+  analyzed: { label: '임시 저장', color: 'var(--status-analyzing)', glow: 'rgba(245, 158, 11, 0.35)' },
+  completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.3)' },
+  failed: { label: '업로드 실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' }
 }
 
 const categoryTypeConfig = {
@@ -17,12 +20,21 @@ export function CardItem({
   categoryType,
   date,
   status,
+  isStale,
   isSelected,
   showCheckbox,
   onSelect,
-  onClick
+  onClick,
+  uploadFailed
 }) {
-  const config = statusConfig[status] || statusConfig.pending
+  // 업로드 실패 시 failed 상태로 표시, 아니면 기존 로직
+  let effectiveStatus = status
+  if (uploadFailed) {
+    effectiveStatus = 'failed'
+  } else if (status === 'pending' && isStale) {
+    effectiveStatus = 'pending_stale'
+  }
+  const config = statusConfig[effectiveStatus] || statusConfig.pending
   const typeConfig = categoryTypeConfig[categoryType] || categoryTypeConfig['메모']
 
   return (
