@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
@@ -58,14 +59,6 @@ else:
 async def health_check():
     return {"status": "ok"}
 
-
-class AnalyzeRequest(BaseModel):
-    text: str
-    user_id: str
-    image_url: Optional[str] = None
-    category_id: Optional[int] = None
-
-
 def _parse_iso_datetime(value: str) -> datetime:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
@@ -81,7 +74,7 @@ def _parse_iso_date(value: str) -> datetime:
 
 class AIAnalysisData(BaseModel):
     # ========== 공통 필수 ==========
-    type: Literal["CALENDAR", "MEMO"]
+    type: Literal["CALENDAR", "MEMO"] = "MEMO"
     summary: str
 
     # ========== 공통 선택 ==========
@@ -246,6 +239,27 @@ def _fallback_analyze(text: str) -> dict:
     }
 
 
+def _clean_ai_response(raw_text: str) -> str:
+    """
+    AI 응답에서 마크다운 코드 블록 기호를 제거.
+    ```json ... ``` 또는 ``` ... ``` 형태를 처리.
+    """
+    if not raw_text:
+        return raw_text
+
+    # ```json 또는 ```로 감싸진 경우 내용만 추출
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text)
+    if match:
+        return match.group(1).strip()
+
+    # JSON 객체만 추출 시도
+    match = re.search(r"\{[\s\S]*\}", raw_text)
+    if match:
+        return match.group(0).strip()
+
+    return raw_text.strip()
+
+
 async def _run_ai_analysis(
     record_id: int,
     user_id: str,
@@ -256,29 +270,42 @@ async def _run_ai_analysis(
     """
     백그라운드에서 AI 분석을 수행하고 결과를 DB에 저장.
     분석 완료 후 SSE로 클라이언트에 알림.
-    AI 분석 실패 시 ANALYSIS_FAILED 상태로 저장.
+
+    로직:
+    1. AI 모듈로 분석 수행
+    2. 응답 파싱 및 AIAnalysisData 검증 시도
+    3. 성공 시 status='ANALYZED'로 업데이트
+    4. 실패 시 AIAnalysisData 호출하지 않고 실패 상태로 저장
     """
+    raw_response = None
+    error_message = None
+
     try:
-        # AI 모듈이 사용 가능한 경우 Gemini 분석
-        if ai_is_available():
-            print(f"[AI] 레코드 {record_id} Gemini 분석 시작 (이미지: {'있음' if image_bytes else '없음'})")
-            if image_bytes and ai_analyze_image_bytes is not None:
-                # 이미지가 있으면 이미지 분석
-                analysis_result = await ai_analyze_image_bytes(image_bytes, image_mime_type, text)
-            elif text and ai_analyze_text is not None:
-                # 텍스트만 있으면 텍스트 분석
-                analysis_result = await ai_analyze_text(text)
-            else:
-                # 둘 다 없으면 분석 실패
-                raise ValueError("분석할 텍스트 또는 이미지가 없습니다.")
-        else:
-            # AI 모듈이 없으면 분석 실패 처리
+        # Step 1: AI 모듈 사용 가능 여부 확인
+        if not ai_is_available():
             raise RuntimeError("AI 모듈이 사용 불가능합니다.")
 
-        # 분석 결과 검증 및 저장
+        print(f"[AI] 레코드 {record_id} Gemini 분석 시작 (이미지: {'있음' if image_bytes else '없음'})")
+
+        # Step 2: AI 분석 수행
+        if image_bytes and ai_analyze_image_bytes is not None:
+            analysis_result = await ai_analyze_image_bytes(image_bytes, image_mime_type, text)
+        elif text and ai_analyze_text is not None:
+            analysis_result = await ai_analyze_text(text)
+        else:
+            raise ValueError("분석할 텍스트 또는 이미지가 없습니다.")
+
+        # Step 3: AI 응답이 에러 딕셔너리인지 확인
+        # (ai/app.py의 _parse_json_response가 파싱 실패 시 {"error": ..., "raw": ...} 반환)
+        if isinstance(analysis_result, dict) and "error" in analysis_result:
+            raw_response = analysis_result.get("raw", str(analysis_result))
+            raise ValueError(f"AI 응답 파싱 실패: {analysis_result.get('error')}")
+
+        # Step 4: AIAnalysisData 모델로 검증 (pydantic ValidationError 발생 가능)
         validated = AIAnalysisData(**analysis_result)
         analysis_payload = validated.model_dump(exclude_none=True)
 
+        # Step 5: 성공 시 DB 업데이트
         supabase.table("inputs").update({
             "status": "ANALYZED",
             "type": validated.type,
@@ -294,13 +321,21 @@ async def _run_ai_analysis(
         print(f"[AI] 레코드 {record_id} 분석 완료: {validated.type}")
 
     except Exception as e:
+        # Step 6: 실패 시 AIAnalysisData 호출하지 않고 실패 상태로 저장
         error_message = str(e)
         print(f"[AI] 레코드 {record_id} 분석 실패: {error_message}")
 
-        # 분석 실패 시 status는 PENDING 유지, result에 error 저장
-        # (DB CHECK 제약조건으로 인해 ANALYSIS_FAILED 사용 불가)
+        # 실패 결과 저장 (DB CHECK 제약조건으로 인해 status는 PENDING 유지)
+        fail_result = {
+            "analysis_failed": True,
+            "error": error_message,
+        }
+        # raw_response가 있으면 함께 저장 (디버깅용)
+        if raw_response:
+            fail_result["raw_text"] = raw_response[:2000]  # 너무 길면 자르기
+
         supabase.table("inputs").update({
-            "result": {"error": error_message, "analysis_failed": True},
+            "result": fail_result,
         }).eq("id", record_id).execute()
 
         # analysis_failed SSE 이벤트 발행

@@ -133,19 +133,94 @@ def _today_kst_str() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d")
 
 
+def _fix_truncated_json(text: str) -> str:
+    """잘린 JSON을 최대한 복구합니다. 문자열 내 개행도 이스케이프 처리."""
+    if not text:
+        return text
+
+    # 문자열 내부의 실제 개행(\n, \r)을 이스케이프 처리
+    result = []
+    in_string = False
+    escape_next = False
+    i = 0
+
+    while i < len(text):
+        char = text[i]
+
+        if escape_next:
+            result.append(char)
+            escape_next = False
+            i += 1
+            continue
+
+        if char == '\\':
+            result.append(char)
+            escape_next = True
+            i += 1
+            continue
+
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            i += 1
+            continue
+
+        # 문자열 내부에서 실제 개행 문자를 이스케이프
+        if in_string and char in ('\n', '\r'):
+            if char == '\n':
+                result.append('\\n')
+            elif char == '\r':
+                result.append('\\r')
+            i += 1
+            continue
+
+        result.append(char)
+        i += 1
+
+    text = ''.join(result)
+
+    # 문자열이 닫히지 않았으면 " 추가
+    if in_string:
+        text += '"'
+
+    # 괄호 개수 맞추기
+    open_braces = text.count('{') - text.count('}')
+    open_brackets = text.count('[') - text.count(']')
+
+    # 닫는 괄호 추가
+    text += ']' * open_brackets
+    text += '}' * open_braces
+
+    return text
+
+
 def _parse_json_response(text: str) -> dict:
     """모델이 ```json ...``` 으로 감싸거나, 앞/뒤에 설명을 붙여도 최대한 JSON만 뽑아냅니다."""
+    # 1차: ```json...``` 패턴
+    m = re.search(r"```json\s*([\s\S]*?)\s*```", text)
+    if m:
+        json_str = m.group(1)
+    else:
+        # 2차: {...} 또는 {... 패턴
+        m = re.search(r"\{[\s\S]*", text)
+        if m:
+            json_str = m.group(0)
+        else:
+            return {"error": "JSON 파싱 실패", "raw": text}
+
+    # 먼저 그대로 파싱 시도
     try:
-        m = re.search(r"```json\s*([\s\S]*?)\s*```", text)
-        if m:
-            return json.loads(m.group(1))
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
 
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            return json.loads(m.group(0))
-
-        return {"error": "JSON 파싱 실패", "raw": text}
-    except Exception:
+    # 실패 시 복구 후 재시도 (개행 이스케이프 + 괄호 닫기)
+    fixed = _fix_truncated_json(json_str)
+    try:
+        logger.warning("JSON 복구 적용됨 (개행/괄호 수정)")
+        return json.loads(fixed)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON 복구 실패: {e}")
         return {"error": "JSON 파싱 실패", "raw": text}
 
 
@@ -268,8 +343,18 @@ def _gemini_generate(contents: list, raise_http: bool = True) -> dict:
                 max_output_tokens=1024,
             ),
         )
-        result = _parse_json_response(resp.text or "")
-        logger.info(f"분석 완료 - 타입: {result.get('type', 'unknown')}")
+        raw_text = resp.text or ""
+        logger.info(f"Gemini 원본 응답:\n{raw_text[:2000]}")  # 디버깅용 (최대 2000자)
+
+        result = _parse_json_response(raw_text)
+
+        # type 필드 유효성 검사: 없거나 유효하지 않으면 MEMO로 설정
+        valid_types = ("CALENDAR", "MEMO")
+        if result.get("type") not in valid_types:
+            logger.warning(f"유효하지 않은 type '{result.get('type')}' → 'MEMO'로 변경")
+            result["type"] = "MEMO"
+
+        logger.info(f"분석 완료 - 타입: {result.get('type')}")
         return result
     except Exception as e:
         logger.error(f"Gemini 호출 실패: {e}")
