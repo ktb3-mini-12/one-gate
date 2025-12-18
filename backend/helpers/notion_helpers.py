@@ -146,7 +146,7 @@ def build_notion_page_blocks(record, upload_data):
         })
 
     # 2. Add analysis heading + content
-    analysis_content = upload_data.get("content") or upload_data.get("body")
+    analysis_content = upload_data.get("content")
     if analysis_content:
         blocks.append({
             "object": "block",
@@ -183,7 +183,7 @@ def build_notion_page_blocks(record, upload_data):
 
     # Fallback: if no blocks were added, add a simple paragraph
     if not blocks:
-        fallback_content = upload_data.get("body") or upload_data.get("content") or original_text or "내용 없음"
+        fallback_content = upload_data.get("content") or original_text or "내용 없음"
         blocks.append({
             "object": "block",
             "type": "paragraph",

@@ -138,3 +138,27 @@ async def create_calendar_event(
         return {"status": "error", "message": str(e)}
 
 
+@router.delete("/auth/disconnect")
+async def disconnect_google_calendar(user_id: str):
+    """
+    Disconnect Google Calendar integration.
+
+    Note: Google tokens are stored in browser localStorage only.
+    This endpoint provides a confirmation point for the disconnect flow.
+    """
+    try:
+        # Delete all CALENDAR type categories for this user
+        supabase.table("category").delete().eq("user_id", user_id).eq("type", "CALENDAR").execute()
+
+        return {
+            "status": "success",
+            "message": "Google Calendar disconnected successfully"
+        }
+    except Exception as e:
+        print(f"[Calendar] Disconnect error: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+

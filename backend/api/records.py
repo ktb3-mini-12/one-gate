@@ -356,7 +356,7 @@ async def upload_record(
 
             # AIAnalysisData → CalendarData mapping
             summary = upload_data.get("summary") or record.get("text", "")[:50]
-            description = upload_data.get("content") or upload_data.get("body") or ""
+            description = upload_data.get("content") or ""
 
             # Time fallback
             fallback_start = datetime.utcnow().replace(hour=14, minute=0, second=0, microsecond=0)
@@ -431,7 +431,7 @@ async def upload_record(
 
             # AIAnalysisData → MemoData mapping
             title = upload_data.get("summary") or record.get("text", "")[:100]
-            content = upload_data.get("body") or upload_data.get("content") or record.get("text", "")
+            content = upload_data.get("content") or record.get("text", "")
             category = upload_data.get("category") or "아이디어"
 
             # Detect or create required properties

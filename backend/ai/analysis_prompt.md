@@ -46,7 +46,6 @@
   "attendees": null,
   "recurrence": null,
   "meeting_url": null,
-  "body": "발표자료를 완성해야 한다.",
   "due_date": "2025-12-19",
   "memo_status": "시작 전",
   "confidence": 0.91
@@ -69,7 +68,6 @@
 - **meeting_url**: 화상회의 URL
 
 ### MEMO 전용:
-- **body**: 상세 내용 또는 정리된 메모
 - **due_date**: 마감일 (YYYY-MM-DD 형식)
 - **memo_status**: "시작 전", "진행 중", "완료" 중 하나
 - **confidence** (필수): 분류 신뢰도 (0~1 사이)
