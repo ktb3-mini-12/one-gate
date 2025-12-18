@@ -312,13 +312,13 @@ app.whenReady().then(() => {
     if (miniWindow.isVisible()) {
       miniWindow.hide()
     } else {
-      // 중앙 하단에 위치시키기
+      // 화면 정중앙에 위치시키기
       const { screen } = require('electron')
       const primaryDisplay = screen.getPrimaryDisplay()
       const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
-      const [winWidth] = miniWindow.getSize()
+      const [winWidth, winHeight] = miniWindow.getSize()
       const x = Math.round((screenWidth - winWidth) / 2)
-      const y = Math.round(screenHeight - 150) // 하단에서 150px 위
+      const y = Math.round((screenHeight - winHeight) / 2)
       miniWindow.setPosition(x, y)
       miniWindow.show()
       miniWindow.focus()

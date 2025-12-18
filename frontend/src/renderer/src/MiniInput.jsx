@@ -171,7 +171,8 @@ function MiniInput({ user }) {
             : '0 25px 50px -12px var(--action-secondary), 0 0 0 1px var(--divider)',
         backdropFilter: 'blur(20px)',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        position: 'relative'
+        position: 'relative',
+        WebkitAppRegion: 'drag'
       }}
     >
       {/* 이미지 미리보기 */}
@@ -184,7 +185,8 @@ function MiniInput({ user }) {
             gap: '14px',
             borderBottom: '1px solid var(--divider)',
             background:
-              'linear-gradient(180deg, var(--surface-gradient-top), var(--surface-primary))'
+              'linear-gradient(180deg, var(--surface-gradient-top), var(--surface-primary))',
+            WebkitAppRegion: 'no-drag'
           }}
         >
           <div style={{ position: 'relative' }}>
@@ -226,7 +228,8 @@ function MiniInput({ user }) {
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontWeight: '600',
-                transition: 'transform 0.2s ease'
+                transition: 'transform 0.2s ease',
+                WebkitAppRegion: 'no-drag'
               }}
               onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.1)')}
               onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
@@ -325,7 +328,7 @@ function MiniInput({ user }) {
           onKeyDown={handleKeyDown}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
-          placeholder={image ? '이미지 설명 추가...' : '할 일, 일정 입력 · 이미지 붙여넣기'}
+          placeholder={image ? '이미지 설명 추가...' : '메모, 일정 입력 · 이미지 붙여넣기'}
           autoFocus
           disabled={loading}
           style={{
@@ -337,7 +340,8 @@ function MiniInput({ user }) {
             background: 'transparent',
             height: '100%',
             color: 'var(--text-primary)',
-            letterSpacing: '-0.01em'
+            letterSpacing: '-0.01em',
+            WebkitAppRegion: 'no-drag'
           }}
         />
 
@@ -368,7 +372,8 @@ function MiniInput({ user }) {
               background: 'var(--action-primary)',
               border: '1px solid var(--action-primary-hover)',
               cursor: 'pointer',
-              transition: 'all 0.2s ease'
+              transition: 'all 0.2s ease',
+              WebkitAppRegion: 'no-drag'
             }}
             onClick={analyze}
             onMouseEnter={(e) => {
