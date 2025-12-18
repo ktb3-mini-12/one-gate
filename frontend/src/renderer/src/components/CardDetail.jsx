@@ -2,7 +2,8 @@ import React, { useState } from 'react'
 import { ConfirmModal } from './ConfirmModal'
 
 const statusConfig = {
-  pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.4)' },
+  pending: { label: '분석 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.4)' },
+  analyzed: { label: '임시 저장', color: 'var(--status-analyzing)', glow: 'rgba(245, 158, 11, 0.45)' },
   completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.4)' }
 }
 
@@ -11,13 +12,63 @@ const categoryTypeConfig = {
   '메모': { color: '#9AA0A6', bg: 'rgba(154, 160, 166, 0.15)', border: 'rgba(154, 160, 166, 0.3)', icon: '📝' }
 }
 
-export function CardDetail({ summary, category, categoryType, date, status, onClose, onUpload, onDelete, isUploading }) {
+export function CardDetail({ summary, category, categoryType, date, status, rawData, onClose, onUpload, onDelete, isUploading }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [validationError, setValidationError] = useState(null)
   const config = statusConfig[status] || statusConfig.pending
   const typeConfig = categoryTypeConfig[categoryType] || categoryTypeConfig['메모']
 
+  const isTemporary = status === 'analyzed'
+  const analysis = rawData?.result || {}
+  const initialBody = typeof analysis.body === 'string'
+    ? analysis.body
+    : (typeof analysis.content === 'string' ? analysis.content : '')
+
+  const [draftSummary, setDraftSummary] = useState(analysis.summary || summary || '')
+  const [draftBody, setDraftBody] = useState(initialBody)
+
+  const validateBeforeUpload = (data, type) => {
+    if (!data?.summary?.trim()) {
+      return { valid: false, error: '제목을 입력해주세요.' }
+    }
+    if (type === 'CALENDAR' && !data.start_time && !data.end_time) {
+      // 시간이 없어도 fallback이 있으므로 경고만 표시
+      console.warn('일정 시간이 없습니다. 기본 시간이 적용됩니다.')
+    }
+    return { valid: true }
+  }
+
   const handleDeleteClick = () => {
     setShowDeleteConfirm(true)
+  }
+
+  const handleUploadClick = () => {
+    setValidationError(null)
+
+    // 수정된 데이터가 있으면 final_data로 전달
+    const hasChanges = draftSummary !== (analysis.summary || summary || '') ||
+                       draftBody !== initialBody
+
+    let finalData
+    if (hasChanges) {
+      finalData = { ...analysis, summary: draftSummary }
+      if (Object.prototype.hasOwnProperty.call(analysis, 'body')) {
+        finalData.body = draftBody
+      } else {
+        finalData.content = draftBody
+      }
+    } else {
+      finalData = { ...analysis }
+    }
+
+    // 입력 검증
+    const validation = validateBeforeUpload(finalData, rawData?.type)
+    if (!validation.valid) {
+      setValidationError(validation.error)
+      return
+    }
+
+    onUpload?.(hasChanges ? finalData : null)
   }
 
   const handleConfirmDelete = () => {
@@ -98,17 +149,37 @@ export function CardDetail({ summary, category, categoryType, date, status, onCl
           {/* Content */}
           <div className="px-6 pb-6">
             {/* Summary */}
-            <p
-              className="mb-4"
-              style={{
-                color: 'var(--text-primary)',
-                fontSize: '16px',
-                fontWeight: '500',
-                lineHeight: '1.6'
-              }}
-            >
-              {summary}
-            </p>
+            {isTemporary ? (
+              <div className="mb-4">
+                <label className="block text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                  제목
+                </label>
+                <input
+                  value={draftSummary}
+                  onChange={(e) => setDraftSummary(e.target.value)}
+                  className="w-full border-none outline-none rounded-2xl px-4 py-3"
+                  style={{
+                    background: 'var(--surface-gradient-top)',
+                    color: 'var(--text-primary)',
+                    fontSize: '15px',
+                    fontWeight: '500'
+                  }}
+                  disabled={isUploading}
+                />
+              </div>
+            ) : (
+              <p
+                className="mb-4"
+                style={{
+                  color: 'var(--text-primary)',
+                  fontSize: '16px',
+                  fontWeight: '500',
+                  lineHeight: '1.6'
+                }}
+              >
+                {summary}
+              </p>
+            )}
 
             {/* Meta Info */}
             <div className="flex items-center gap-3 mb-6">
@@ -134,6 +205,41 @@ export function CardDetail({ summary, category, categoryType, date, status, onCl
               style={{ background: 'linear-gradient(90deg, transparent, var(--divider), transparent)' }}
             />
 
+            {/* Body (temporary only) */}
+            {isTemporary && (
+              <div className="mb-5">
+                <label className="block text-xs mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                  본문
+                </label>
+                <textarea
+                  value={draftBody}
+                  onChange={(e) => setDraftBody(e.target.value)}
+                  className="w-full border-none outline-none resize-none rounded-2xl px-4 py-3"
+                  style={{
+                    background: 'var(--surface-gradient-top)',
+                    color: 'var(--text-primary)',
+                    fontSize: '14px',
+                    minHeight: '120px'
+                  }}
+                  disabled={isUploading}
+                />
+              </div>
+            )}
+
+            {/* Validation Error */}
+            {validationError && (
+              <div
+                className="mb-4 px-4 py-2 rounded-xl text-sm"
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#EF4444'
+                }}
+              >
+                {validationError}
+              </div>
+            )}
+
             {/* Actions */}
             <div className="flex gap-3">
               <button
@@ -150,9 +256,10 @@ export function CardDetail({ summary, category, categoryType, date, status, onCl
               >
                 삭제
               </button>
+
               <button
-                onClick={onUpload}
-                disabled={isUploading}
+                onClick={handleUploadClick}
+                disabled={isUploading || status === 'pending'}
                 className="flex-1 py-3 rounded-2xl transition-all hover:opacity-90 disabled:opacity-70 flex items-center justify-center gap-2"
                 style={{
                   background: 'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
