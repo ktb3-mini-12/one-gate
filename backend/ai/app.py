@@ -214,6 +214,13 @@ def _fix_truncated_json(text: str) -> str:
     if in_string:
         text += '"'
 
+    # 불완전한 키-값 쌍 제거 (예: ,"key 또는 , "key": 로 끝나는 경우)
+    # 패턴: 마지막 완전한 값 이후의 불완전한 부분 제거
+    text = re.sub(r',\s*"[^"]*"\s*:\s*$', '', text)  # "key": 로 끝남
+    text = re.sub(r',\s*"[^"]*"\s*$', '', text)      # "key" 로 끝남 (콜론 없음)
+    text = re.sub(r',\s*"[^"]*$', '', text)          # "key 로 끝남 (닫는 따옴표 없음)
+    text = re.sub(r',\s*$', '', text)                # 쉼표로 끝남
+
     # 괄호 개수 맞추기
     open_braces = text.count('{') - text.count('}')
     open_brackets = text.count('[') - text.count(']')
@@ -223,6 +230,47 @@ def _fix_truncated_json(text: str) -> str:
     text += '}' * open_braces
 
     return text
+
+
+def _extract_partial_fields(text: str) -> dict | None:
+    """
+    JSON 파싱 실패 시 정규식으로 주요 필드를 추출하여 부분 데이터라도 반환.
+    최소 type과 summary가 있어야 유효한 결과로 인정.
+    """
+    result = {}
+
+    # type 추출: "type": "MEMO" 또는 "type": "CALENDAR"
+    type_match = re.search(r'"type"\s*:\s*"(MEMO|CALENDAR)"', text, re.IGNORECASE)
+    if type_match:
+        result["type"] = type_match.group(1).upper()
+
+    # summary 추출: "summary": "..."
+    summary_match = re.search(r'"summary"\s*:\s*"([^"]*)"', text)
+    if summary_match:
+        result["summary"] = summary_match.group(1)
+
+    # content 추출: "content": "..." (값이 잘린 경우도 포함)
+    content_match = re.search(r'"content"\s*:\s*"([^"]*)"?', text)
+    if content_match:
+        result["content"] = content_match.group(1)
+
+    # category 추출
+    category_match = re.search(r'"category"\s*:\s*"([^"]*)"', text)
+    if category_match:
+        result["category"] = category_match.group(1)
+
+    # 최소 type과 summary가 있어야 유효
+    if result.get("type") and result.get("summary"):
+        # 누락된 필수 필드 기본값 설정
+        if "content" not in result:
+            result["content"] = result["summary"]
+        if "category" not in result:
+            result["category"] = "일정" if result["type"] == "CALENDAR" else "메모"
+
+        logger.warning(f"부분 필드 추출 성공: {list(result.keys())}")
+        return result
+
+    return None
 
 
 def _parse_json_response(text: str) -> dict:
@@ -252,7 +300,14 @@ def _parse_json_response(text: str) -> dict:
         return json.loads(fixed)
     except json.JSONDecodeError as e:
         logger.error(f"JSON 복구 실패: {e}")
-        return {"error": "JSON 파싱 실패", "raw": text}
+
+    # 최종 fallback: 정규식으로 부분 필드 추출
+    partial = _extract_partial_fields(text)
+    if partial:
+        logger.warning("부분 필드 추출로 복구됨")
+        return partial
+
+    return {"error": "JSON 파싱 실패", "raw": text}
 
 
 def _require_client():
@@ -353,45 +408,121 @@ async def _read_upload_bytes(upload: UploadFile) -> bytes:
     return data
 
 
-def _build_prompt() -> str:
-    return ANALYSIS_PROMPT.format(today=_today_kst_str())
+def _parse_categories(categories_input: str) -> list[str] | None:
+    """카테고리 입력을 파싱. JSON array 또는 쉼표 구분 문자열 지원."""
+    if not categories_input:
+        return None
+    try:
+        parsed = json.loads(categories_input)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return parsed
+    except (json.JSONDecodeError, TypeError):
+        # 쉼표 구분 문자열로 처리
+        items = [s.strip() for s in categories_input.split(",") if s.strip()]
+        if items:
+            return items
+    return None
 
 
-def _gemini_generate(contents: list, raise_http: bool = True) -> dict:
-    """google-genai SDK 호출 (JSON 응답 강제)"""
+def _build_prompt(
+    memo_categories: str = None,
+    calendar_categories: str = None,
+) -> str:
+    """프롬프트 생성. 카테고리 유무에 따라 다른 지시사항 생성."""
+    memo_cats = _parse_categories(memo_categories)
+    calendar_cats = _parse_categories(calendar_categories)
+
+    # 카테고리 지시사항 생성
+    instructions = []
+
+    if memo_cats:
+        instructions.append(
+            f"**MEMO 카테고리**: 반드시 다음 중에서 선택하세요: {', '.join(memo_cats)}"
+        )
+    else:
+        instructions.append(
+            "**MEMO 카테고리**: 내용에 가장 적합한 카테고리를 자유롭게 추천하세요. (예: 할 일, 아이디어, 쇼핑, 일상 등)"
+        )
+
+    if calendar_cats:
+        instructions.append(
+            f"**CALENDAR 카테고리**: 반드시 다음 중에서 선택하세요: {', '.join(calendar_cats)}"
+        )
+    else:
+        instructions.append(
+            "**CALENDAR 카테고리**: 내용에 가장 적합한 카테고리를 자유롭게 추천하세요. (예: 약속, 회의, 운동, 여행 등)"
+        )
+
+    category_instruction = "\n".join(instructions)
+
+    return ANALYSIS_PROMPT.format(
+        today=_today_kst_str(),
+        category_instruction=category_instruction,
+    )
+
+
+MAX_RETRIES = 2
+
+
+def _gemini_generate(
+    contents: list,
+    raise_http: bool = True,
+    memo_categories: str = None,
+    calendar_categories: str = None,
+) -> dict:
+    """google-genai SDK 호출 (JSON 응답 강제, 파싱 실패 시 재시도)"""
     c = _require_client()
-    prompt = _build_prompt()
+    prompt = _build_prompt(memo_categories, calendar_categories)
     final_contents = list(contents) + [prompt]
 
-    try:
-        logger.info(f"Gemini API 호출 - 모델: {MODEL}")
-        resp = c.models.generate_content(
-            model=MODEL,
-            contents=final_contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.2,
-                max_output_tokens=1024,
-            ),
-        )
-        raw_text = resp.text or ""
-        logger.info(f"Gemini 원본 응답:\n{raw_text[:2000]}")  # 디버깅용 (최대 2000자)
+    last_error = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            logger.info(f"Gemini API 호출 - 모델: {MODEL}, 시도: {attempt + 1}/{MAX_RETRIES + 1}")
+            resp = c.models.generate_content(
+                model=MODEL,
+                contents=final_contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                    max_output_tokens=2048,
+                ),
+            )
+            raw_text = resp.text or ""
+            logger.info(f"Gemini 원본 응답:\n{raw_text[:2000]}")
 
-        result = _parse_json_response(raw_text)
+            result = _parse_json_response(raw_text)
 
-        # type 필드 유효성 검사: 없거나 유효하지 않으면 MEMO로 설정
-        valid_types = ("CALENDAR", "MEMO")
-        if result.get("type") not in valid_types:
-            logger.warning(f"유효하지 않은 type '{result.get('type')}' → 'MEMO'로 변경")
-            result["type"] = "MEMO"
+            # JSON 파싱 실패 시 재시도
+            if "error" in result and attempt < MAX_RETRIES:
+                logger.warning(f"JSON 파싱 실패, 재시도 ({attempt + 1}/{MAX_RETRIES})")
+                last_error = result.get("raw", "JSON parsing failed")
+                continue
 
-        logger.info(f"분석 완료 - 타입: {result.get('type')}")
-        return result
-    except Exception as e:
-        logger.error(f"Gemini 호출 실패: {e}")
-        if raise_http:
-            raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
-        raise
+            # type 필드 유효성 검사: 없거나 유효하지 않으면 MEMO로 설정
+            valid_types = ("CALENDAR", "MEMO")
+            if result.get("type") not in valid_types:
+                logger.warning(f"유효하지 않은 type '{result.get('type')}' → 'MEMO'로 변경")
+                result["type"] = "MEMO"
+
+            logger.info(f"분석 완료 - 타입: {result.get('type')}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Gemini 호출 실패 (시도 {attempt + 1}): {e}")
+            last_error = str(e)
+            if attempt < MAX_RETRIES:
+                continue
+            if raise_http:
+                raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
+            raise
+
+    # 모든 재시도 실패
+    error_msg = f"최대 재시도 횟수 초과: {last_error}"
+    logger.error(error_msg)
+    if raise_http:
+        raise HTTPException(status_code=500, detail=error_msg)
+    raise Exception(error_msg)
 
 
 # ============ Service Functions (내부 호출용) ============
@@ -417,8 +548,12 @@ async def analyze_text(
     if not text or not text.strip():
         raise ValueError("분석할 텍스트가 비어있습니다.")
 
-    # TODO: memo_categories, calendar_categories를 프롬프트에 활용
-    return _gemini_generate([f"분석할 내용:\n{text.strip()}"], raise_http=False)
+    return _gemini_generate(
+        [f"분석할 내용:\n{text.strip()}"],
+        raise_http=False,
+        memo_categories=memo_categories,
+        calendar_categories=calendar_categories,
+    )
 
 
 async def analyze_image_bytes(
@@ -455,8 +590,12 @@ async def analyze_image_bytes(
         contents.append(f"추가 설명:\n{text.strip()}")
     contents.append("이 이미지를 분석해주세요.")
 
-    # TODO: memo_categories, calendar_categories를 프롬프트에 활용
-    return _gemini_generate(contents, raise_http=False)
+    return _gemini_generate(
+        contents,
+        raise_http=False,
+        memo_categories=memo_categories,
+        calendar_categories=calendar_categories,
+    )
 
 
 def is_ai_available() -> bool:
@@ -473,6 +612,8 @@ async def analyze(
     type: InputType = Form(..., description="입력 타입: text, image, pdf"),
     content: Optional[str] = Form(None, description="텍스트 내용 (type=text일 때 필수, image/pdf일 때 선택)"),
     file: Optional[UploadFile] = File(None, description="파일 (type=image/pdf일 때 필수)"),
+    memo_categories: Optional[str] = Form(None, description="MEMO 카테고리 목록 (JSON array 또는 쉼표 구분 문자열)"),
+    calendar_categories: Optional[str] = Form(None, description="CALENDAR 카테고리 목록 (JSON array 또는 쉼표 구분 문자열)"),
 ):
     """입력을 분석하여 CALENDAR 또는 MEMO로 분류
 
@@ -485,7 +626,11 @@ async def analyze(
     if type == "text":
         if not content or not content.strip():
             raise HTTPException(status_code=400, detail="type=text인 경우 content가 필요합니다.")
-        data = _gemini_generate([f"분석할 내용:\n{content.strip()}"])
+        data = _gemini_generate(
+            [f"분석할 내용:\n{content.strip()}"],
+            memo_categories=memo_categories,
+            calendar_categories=calendar_categories,
+        )
         return AnalyzeResponse(status="success", data=data)
 
     if type in ("image", "pdf"):
@@ -501,22 +646,32 @@ async def analyze(
             part = types.Part.from_bytes(data=processed_bytes, mime_type=processed_mime)
             if content and content.strip():
                 logger.info("이미지 + 텍스트 분석")
-                data = _gemini_generate([
-                    part,
-                    f"이 이미지와 함께 다음 내용을 분석해주세요:\n{content.strip()}"
-                ])
+                data = _gemini_generate(
+                    [part, f"이 이미지와 함께 다음 내용을 분석해주세요:\n{content.strip()}"],
+                    memo_categories=memo_categories,
+                    calendar_categories=calendar_categories,
+                )
             else:
-                data = _gemini_generate([part, "이 이미지를 분석해주세요."])
+                data = _gemini_generate(
+                    [part, "이 이미지를 분석해주세요."],
+                    memo_categories=memo_categories,
+                    calendar_categories=calendar_categories,
+                )
         else:
             part = types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")
             if content and content.strip():
                 logger.info("PDF + 텍스트 분석")
-                data = _gemini_generate([
-                    part,
-                    f"이 PDF 문서와 함께 다음 내용을 분석해주세요:\n{content.strip()}"
-                ])
+                data = _gemini_generate(
+                    [part, f"이 PDF 문서와 함께 다음 내용을 분석해주세요:\n{content.strip()}"],
+                    memo_categories=memo_categories,
+                    calendar_categories=calendar_categories,
+                )
             else:
-                data = _gemini_generate([part, "이 PDF 문서를 분석해주세요."])
+                data = _gemini_generate(
+                    [part, "이 PDF 문서를 분석해주세요."],
+                    memo_categories=memo_categories,
+                    calendar_categories=calendar_categories,
+                )
 
         return AnalyzeResponse(status="success", data=data)
 
