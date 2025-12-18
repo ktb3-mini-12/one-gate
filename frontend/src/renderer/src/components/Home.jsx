@@ -16,21 +16,23 @@ function Toast({ message, type, onClose }) {
 
   return (
     <div
-      className="fixed top-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl flex items-center gap-3 z-50"
+      className="fixed top-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl flex items-center gap-3 z-50 animate-slide-up"
       style={{
-        background: type === 'success'
-          ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.95), rgba(5, 150, 105, 0.95))'
-          : 'linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(185, 28, 28, 0.95))',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-        backdropFilter: 'blur(12px)',
-        animation: 'slide-down 0.3s ease-out'
+        background: type === 'success' ? 'var(--status-completed)' : 'var(--status-error)',
+        boxShadow: 'var(--shadow-lg)'
       }}
     >
-      {type === 'success' && (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
+        {type === 'success' ? (
           <polyline points="20 6 9 17 4 12" />
-        </svg>
-      )}
+        ) : (
+          <>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="15" y1="9" x2="9" y2="15" />
+            <line x1="9" y1="9" x2="15" y2="15" />
+          </>
+        )}
+      </svg>
       <span style={{ color: '#fff', fontSize: '14px', fontWeight: '500' }}>{message}</span>
     </div>
   )
@@ -69,13 +71,13 @@ export function Home({ user, session, onNavigateToSettings }) {
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(false)
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [toast, setToast] = useState(null)
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
   }
 
-  // Fetch records from backend
   const fetchRecords = async () => {
     if (!user?.id) return
 
@@ -112,7 +114,6 @@ export function Home({ user, session, onNavigateToSettings }) {
     }
 
     ipcRenderer.on('refresh-data', fetchRecords)
-
     return () => ipcRenderer.removeAllListeners('refresh-data')
   }, [user?.id])
 
@@ -139,7 +140,6 @@ export function Home({ user, session, onNavigateToSettings }) {
     setSelectedCards(newSelected)
   }
 
-  // 레코드 완료 처리 (soft delete)
   const completeRecord = async (recordId) => {
     try {
       await api.post(`/records/${recordId}/complete`)
@@ -150,7 +150,6 @@ export function Home({ user, session, onNavigateToSettings }) {
     }
   }
 
-  // 카드를 UI에서 제거
   const removeCardFromUI = (cardId) => {
     setCards((prev) => prev.filter((card) => card.id !== String(cardId)))
   }
@@ -223,20 +222,16 @@ export function Home({ user, session, onNavigateToSettings }) {
         start_time: formatDateTime(tomorrow),
         end_time: formatDateTime(endTime)
       },
-      {
-        headers: { 'X-Google-Token': googleToken }
-      }
+      { headers: { 'X-Google-Token': googleToken } }
     )
 
     if (res.data?.status !== 'success') {
       throw new Error(res.data?.message || 'Calendar upload failed')
     }
-
     return res.data
   }
 
   const addToNotion = async (record) => {
-    // 새로운 OAuth 기반 API 사용
     const res = await api.post('/notion/save-memo', {
       user_id: user.id,
       title: record.text,
@@ -248,7 +243,6 @@ export function Home({ user, session, onNavigateToSettings }) {
     if (res.data?.status !== 'success') {
       throw new Error(res.data?.message || 'Notion upload failed')
     }
-
     return res.data
   }
 
@@ -273,7 +267,9 @@ export function Home({ user, session, onNavigateToSettings }) {
   }
 
   const handleCardClick = (id) => {
-    if (!isBulkSelectMode) {
+    if (isBulkSelectMode) {
+      handleCardSelect(id)
+    } else {
       setSelectedCardId(id)
     }
   }
@@ -300,7 +296,6 @@ export function Home({ user, session, onNavigateToSettings }) {
         showToast('Notion에 업로드되었습니다.', 'success')
       }
 
-      // 완료 처리 후 UI에서 제거
       await completeRecord(selectedCardId)
       removeCardFromUI(selectedCardId)
     } catch (err) {
@@ -326,20 +321,20 @@ export function Home({ user, session, onNavigateToSettings }) {
     }
   }
 
+  const handleLogoutClick = () => {
+    setShowLogoutConfirm(true)
+  }
+
   const handleLogout = () => {
+    setShowLogoutConfirm(false)
     localStorage.removeItem('google_provider_token')
     supabase.auth.signOut()
   }
 
   return (
     <div className="min-h-full p-8 pb-16" style={{ background: 'var(--app-bg)' }}>
-      {/* Toast */}
       {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
+        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
       )}
 
       {/* Header */}
@@ -350,49 +345,48 @@ export function Home({ user, session, onNavigateToSettings }) {
               <img
                 src={user.user_metadata.avatar_url}
                 alt="profile"
-                className="w-9 h-9 rounded-full"
+                className="w-10 h-10 rounded-full"
                 style={{ border: '2px solid var(--divider)' }}
               />
             )}
-            <h3 style={{ color: 'var(--text-secondary)' }}>
-              {user?.user_metadata?.name || user?.email}
-            </h3>
+            <div>
+              <h3 style={{ color: 'var(--text-primary)', fontSize: '16px', fontWeight: '600', margin: 0 }}>
+                {user?.user_metadata?.name || user?.email?.split('@')[0]}
+              </h3>
+              <small style={{ color: 'var(--text-tertiary)' }}>
+                {filteredCards.length}개의 항목
+              </small>
+            </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Upload progress indicator */}
+          <div className="flex items-center gap-2">
             {isUploading && (
-              <div className="flex items-center gap-2 mr-2">
-                <div
-                  className="w-2 h-2 rounded-full animate-pulse"
-                  style={{ background: 'var(--action-primary)' }}
-                />
-                <small style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-                  업로드 중...
-                </small>
+              <div className="flex items-center gap-2 mr-2 px-3 py-1.5 rounded-lg" style={{ background: 'var(--surface-secondary)' }}>
+                <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--action-primary)' }} />
+                <small style={{ color: 'var(--text-secondary)' }}>업로드 중...</small>
               </div>
             )}
 
             <button
               onClick={fetchRecords}
-              className="p-2 rounded-xl transition-all hover:opacity-80"
-              style={{ color: 'var(--text-secondary)' }}
+              className="p-2.5 rounded-xl transition-all hover:opacity-70"
+              style={{ color: 'var(--text-secondary)', background: 'var(--surface-primary)' }}
             >
               <RefreshIcon />
             </button>
 
             <button
-              onClick={handleLogout}
-              className="p-2 rounded-xl transition-all hover:opacity-80"
-              style={{ color: 'var(--text-secondary)' }}
+              onClick={handleLogoutClick}
+              className="p-2.5 rounded-xl transition-all hover:opacity-70"
+              style={{ color: 'var(--text-secondary)', background: 'var(--surface-primary)' }}
             >
               <LogoutIcon />
             </button>
 
             <button
               onClick={onNavigateToSettings}
-              className="p-2 rounded-xl transition-all hover:opacity-80"
-              style={{ color: 'var(--text-secondary)' }}
+              className="p-2.5 rounded-xl transition-all hover:opacity-70"
+              style={{ color: 'var(--text-secondary)', background: 'var(--surface-primary)' }}
             >
               <SettingsIcon />
             </button>
@@ -401,19 +395,17 @@ export function Home({ user, session, onNavigateToSettings }) {
 
         {/* Tabs and actions */}
         <div className="flex items-center justify-between">
-          <div className="flex gap-6">
+          <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--surface-primary)' }}>
             {['전체', '일정', '메모'].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className="pb-2 transition-all"
+                className="px-5 py-2 rounded-lg transition-all"
                 style={{
-                  fontSize: '16px',
+                  fontSize: '14px',
                   fontWeight: activeTab === tab ? '600' : '500',
-                  color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  borderBottom: activeTab === tab
-                    ? '2px solid var(--action-primary)'
-                    : '2px solid transparent'
+                  background: activeTab === tab ? 'var(--surface-elevated)' : 'transparent',
+                  color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-secondary)'
                 }}
               >
                 {tab}
@@ -429,8 +421,8 @@ export function Home({ user, session, onNavigateToSettings }) {
                   disabled={selectedCards.size === 0 || isUploading}
                   className="px-5 py-2 rounded-xl transition-all disabled:opacity-40"
                   style={{
-                    background: 'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
-                    color: '#FFFFFF',
+                    background: 'var(--action-primary)',
+                    color: '#fff',
                     fontWeight: '500',
                     fontSize: '14px'
                   }}
@@ -458,7 +450,7 @@ export function Home({ user, session, onNavigateToSettings }) {
               onClick={handleToggleBulkSelect}
               className="px-4 py-2 rounded-xl transition-all"
               style={{
-                background: isBulkSelectMode ? 'var(--action-primary)' : 'transparent',
+                background: isBulkSelectMode ? 'var(--action-primary)' : 'var(--surface-primary)',
                 color: isBulkSelectMode ? '#fff' : 'var(--text-secondary)',
                 fontWeight: '500',
                 fontSize: '14px'
@@ -473,22 +465,20 @@ export function Home({ user, session, onNavigateToSettings }) {
       {/* Cards grid */}
       <div className="max-w-6xl mx-auto">
         {loading ? (
-          <div className="text-center py-20" style={{ color: 'var(--text-secondary)' }}>
-            <div className="flex justify-center mb-4">
-              <div
-                className="w-8 h-8 rounded-full animate-spin"
-                style={{ border: '2px solid var(--divider)', borderTopColor: 'var(--action-primary)' }}
-              />
-            </div>
-            <div>로딩 중...</div>
+          <div className="text-center py-20">
+            <div
+              className="w-8 h-8 mx-auto mb-4 rounded-full animate-spin"
+              style={{ border: '2px solid var(--divider)', borderTopColor: 'var(--action-primary)' }}
+            />
+            <p style={{ color: 'var(--text-secondary)' }}>로딩 중...</p>
           </div>
         ) : filteredCards.length === 0 ? (
-          <div className="text-center py-20" style={{ color: 'var(--text-secondary)' }}>
+          <div className="text-center py-20">
             <div className="text-4xl mb-4">📭</div>
-            <div style={{ fontSize: '16px', fontWeight: '500' }}>저장된 항목이 없습니다</div>
-            <div className="text-sm mt-2" style={{ color: 'var(--text-tertiary)' }}>
+            <p style={{ color: 'var(--text-primary)', fontWeight: '500' }}>저장된 항목이 없습니다</p>
+            <small style={{ color: 'var(--text-tertiary)' }}>
               Cmd+Shift+Space로 새 항목을 추가하세요
-            </div>
+            </small>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -506,7 +496,7 @@ export function Home({ user, session, onNavigateToSettings }) {
         )}
       </div>
 
-      {/* Card Detail Popover */}
+      {/* Card Detail */}
       {selectedCard && (
         <CardDetail
           {...selectedCard}
@@ -517,7 +507,7 @@ export function Home({ user, session, onNavigateToSettings }) {
         />
       )}
 
-      {/* Bulk Delete Confirmation Modal */}
+      {/* Bulk Delete Confirmation */}
       <ConfirmModal
         isOpen={showBulkDeleteConfirm}
         title="삭제 확인"
@@ -529,17 +519,27 @@ export function Home({ user, session, onNavigateToSettings }) {
         isDanger={true}
       />
 
-      {/* Animation styles */}
+      {/* Logout Confirmation */}
+      <ConfirmModal
+        isOpen={showLogoutConfirm}
+        title="로그아웃"
+        message="정말 로그아웃 하시겠습니까?"
+        confirmText="로그아웃"
+        cancelText="취소"
+        onConfirm={handleLogout}
+        onCancel={() => setShowLogoutConfirm(false)}
+        isDanger={false}
+      />
+
+      {/* Hide scrollbar */}
       <style>{`
-        @keyframes slide-down {
-          from {
-            opacity: 0;
-            transform: translate(-50%, -20px);
-          }
-          to {
-            opacity: 1;
-            transform: translate(-50%, 0);
-          }
+        ::-webkit-scrollbar {
+          display: none;
+        }
+        html, body {
+          overflow: hidden;
+          -ms-overflow-style: none;
+          scrollbar-width: none;
         }
       `}</style>
     </div>

@@ -14,7 +14,7 @@ let notionAuthWindow = null
 function createMiniWindow() {
   miniWindow = new BrowserWindow({
     width: 600,
-    height: 60,
+    height: 64,
     show: false,
     frame: false,
     transparent: true,
@@ -260,7 +260,14 @@ app.whenReady().then(() => {
     if (miniWindow.isVisible()) {
       miniWindow.hide()
     } else {
-      miniWindow.center()
+      // 중앙 하단에 위치시키기
+      const { screen } = require('electron')
+      const primaryDisplay = screen.getPrimaryDisplay()
+      const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
+      const [winWidth] = miniWindow.getSize()
+      const x = Math.round((screenWidth - winWidth) / 2)
+      const y = Math.round(screenHeight - 150) // 하단에서 150px 위
+      miniWindow.setPosition(x, y)
       miniWindow.show()
       miniWindow.focus()
       miniWindow.webContents.send('focus-input')
@@ -306,8 +313,11 @@ ipcMain.on('show-main-window', () => {
 })
 
 // IPC: 미니 창 크기 조절
-ipcMain.on('resize-mini-window', (event, height) => {
-  if (miniWindow) miniWindow.setSize(600, height, true)
+ipcMain.on('resize-mini-window', (event, data) => {
+  if (miniWindow) {
+    const height = typeof data === 'object' ? data.height : data
+    miniWindow.setSize(600, height, true)
+  }
 })
 
 app.on('will-quit', () => {

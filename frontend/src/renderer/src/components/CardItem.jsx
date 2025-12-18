@@ -1,13 +1,29 @@
 import React from 'react'
 
 const statusConfig = {
-  pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.3)' },
-  completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.3)' }
+  pending: {
+    label: '진행 중',
+    color: 'var(--status-analyzing)',
+    bg: 'rgba(245, 158, 11, 0.1)'
+  },
+  completed: {
+    label: '완료',
+    color: 'var(--status-completed)',
+    bg: 'rgba(16, 185, 129, 0.1)'
+  }
 }
 
 const categoryTypeConfig = {
-  '일정': { color: '#4285F4', bg: 'rgba(66, 133, 244, 0.1)', border: 'rgba(66, 133, 244, 0.2)' },
-  '메모': { color: '#9AA0A6', bg: 'rgba(154, 160, 166, 0.1)', border: 'rgba(154, 160, 166, 0.2)' }
+  '일정': {
+    color: 'var(--google-blue)',
+    bg: 'rgba(66, 133, 244, 0.1)',
+    border: 'rgba(66, 133, 244, 0.2)'
+  },
+  '메모': {
+    color: 'var(--action-secondary)',
+    bg: 'rgba(99, 102, 241, 0.1)',
+    border: 'rgba(99, 102, 241, 0.2)'
+  }
 }
 
 export function CardItem({
@@ -29,48 +45,25 @@ export function CardItem({
   return (
     <div
       onClick={() => onClick?.(id)}
-      className="group relative rounded-[24px] p-5 transition-all duration-300 cursor-pointer"
+      className="card-premium p-5 cursor-pointer transition-all hover:translate-y-[-2px]"
       style={{
-        background: isSelected
-          ? 'linear-gradient(180deg, var(--surface-elevated) 0%, var(--surface-primary) 100%)'
-          : 'linear-gradient(180deg, var(--surface-primary) 0%, var(--surface-secondary) 100%)',
-        border: isSelected
-          ? '1px solid var(--action-primary)'
-          : '1px solid var(--divider)',
-        boxShadow: isSelected ? 'var(--shadow-glow-blue)' : 'var(--shadow-sm)',
-        transform: 'translateY(0)'
-      }}
-      onMouseEnter={(e) => {
-        if (!isSelected) {
-          e.currentTarget.style.transform = 'translateY(-2px)'
-          e.currentTarget.style.boxShadow = 'var(--shadow-md)'
-          e.currentTarget.style.borderColor = 'var(--divider-light)'
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!isSelected) {
-          e.currentTarget.style.transform = 'translateY(0)'
-          e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
-          e.currentTarget.style.borderColor = 'var(--divider)'
-        }
+        position: 'relative',
+        borderColor: isSelected ? 'var(--action-primary)' : undefined,
+        boxShadow: isSelected ? 'var(--shadow-glow-blue)' : undefined
       }}
     >
       {/* Checkbox */}
       {showCheckbox && (
-        <div className="absolute top-5 right-5">
+        <div style={{ position: 'absolute', top: '16px', right: '16px', zIndex: 10 }}>
           <div
-            className="w-5 h-5 rounded-lg flex items-center justify-center cursor-pointer transition-all"
             onClick={(e) => {
               e.stopPropagation()
               onSelect?.(id)
             }}
+            className="w-5 h-5 rounded-md flex items-center justify-center cursor-pointer transition-all"
             style={{
-              background: isSelected
-                ? 'var(--action-primary)'
-                : 'var(--surface-gradient-top)',
-              border: isSelected
-                ? '1px solid var(--action-primary)'
-                : '1px solid var(--divider-light)'
+              background: isSelected ? 'var(--action-primary)' : 'var(--surface-secondary)',
+              border: isSelected ? 'none' : '1px solid var(--divider)'
             }}
           >
             {isSelected && (
@@ -82,22 +75,19 @@ export function CardItem({
         </div>
       )}
 
-      {/* Image Thumbnail */}
+      {/* Image */}
       {imageUrl && (
-        <div className="mb-3 -mx-5 -mt-5">
+        <div className="-mx-5 -mt-5 mb-4">
           <img
             src={imageUrl}
-            alt="첨부 이미지"
-            className="w-full h-32 object-cover"
-            style={{
-              borderTopLeftRadius: '24px',
-              borderTopRightRadius: '24px'
-            }}
+            alt=""
+            className="w-full h-36 object-cover"
+            style={{ borderRadius: 'var(--radius-xl) var(--radius-xl) 0 0' }}
           />
         </div>
       )}
 
-      {/* Category Type Badge */}
+      {/* Category Badge */}
       <div className="mb-3">
         <span
           className="px-2.5 py-1 rounded-lg text-xs font-medium"
@@ -111,52 +101,49 @@ export function CardItem({
         </span>
       </div>
 
-      {/* Content */}
-      <div className={`mb-4 ${showCheckbox ? 'pr-8' : ''}`}>
-        <p
-          className="line-clamp-2"
-          style={{
-            color: 'var(--text-primary)',
-            fontSize: '15px',
-            fontWeight: '500',
-            lineHeight: '1.5'
-          }}
-        >
-          {summary}
-        </p>
-      </div>
+      {/* Summary */}
+      <p
+        className="mb-4 line-clamp-2"
+        style={{
+          color: 'var(--text-primary)',
+          fontSize: '14px',
+          fontWeight: '500',
+          lineHeight: '1.6',
+          paddingRight: showCheckbox ? '28px' : '0'
+        }}
+      >
+        {summary}
+      </p>
 
       {/* Footer */}
       <div className="flex items-center justify-between">
         {/* Status */}
         <div className="flex items-center gap-2">
           <div
-            className="w-2 h-2 rounded-full"
-            style={{
-              background: config.color,
-              boxShadow: `0 0 8px ${config.glow}`
-            }}
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: config.color }}
           />
-          <small style={{ color: config.color, fontSize: '11px', fontWeight: '500' }}>
+          <span style={{ color: config.color, fontSize: '12px', fontWeight: '500' }}>
             {config.label}
-          </small>
+          </span>
         </div>
 
-        {/* Date & Category */}
+        {/* Meta */}
         <div className="flex items-center gap-2">
           {category && category !== 'general' && (
             <span
-              className="px-2 py-0.5 rounded-md"
+              className="px-2 py-0.5 rounded text-xs"
               style={{
-                background: 'var(--surface-gradient-top)',
-                color: 'var(--text-secondary)',
-                fontSize: '11px'
+                background: 'var(--surface-secondary)',
+                color: 'var(--text-tertiary)'
               }}
             >
               #{category}
             </span>
           )}
-          <small style={{ color: 'var(--text-tertiary)', fontSize: '11px' }}>{date}</small>
+          <span style={{ color: 'var(--text-tertiary)', fontSize: '12px' }}>
+            {date}
+          </span>
         </div>
       </div>
     </div>
