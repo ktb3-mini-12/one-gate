@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import axios from 'axios'
+import { api } from './lib/api'
 const { ipcRenderer } = window.require('electron')
 
 function MiniInput({ user }) {
@@ -35,7 +35,7 @@ function MiniInput({ user }) {
   const analyze = async (text) => {
     setLoading(true)
     try {
-      await axios.post('http://localhost:8000/analyze', {
+      await api.post('/analyze', {
         text,
         user_id: user.id
       })
