@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-One Gate is a productivity application that provides a unified interface for capturing and managing memos and calendar events. It integrates with Google Calendar and Notion, using AI (Gemini) to automatically classify user inputs.
+One Gate is a productivity application that provides a unified interface for capturing and managing memos and calendar events. It integrates with Google Calendar and Notion, using Vertex AI (Gemini 2.0 Flash) to automatically classify user inputs.
 
 ## Architecture
 
@@ -50,10 +50,13 @@ uvicorn main:app --reload
 
 ### Backend (`.env`)
 - `SUPABASE_URL`, `SUPABASE_KEY` - Supabase connection
-- `GOOGLE_API_KEY` - Gemini AI API key
+- `GOOGLE_APPLICATION_CREDENTIALS` - Vertex AI 서비스 계정 JSON 파일 경로
+- `VERTEX_LOCATION` - Vertex AI 리전 (default: us-central1)
 - `GEMINI_MODEL` - Model name (default: gemini-2.0-flash)
 - `NOTION_SECRET`, `NOTION_DB_ID` - Notion integration
 - `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, `NOTION_REDIRECT_URI` - Notion OAuth
+
+> Note: AI 인증은 Vertex AI (서비스 계정) 또는 Gemini API (GOOGLE_API_KEY) 둘 중 하나 사용
 
 ### Frontend (`.env`)
 - `VITE_API_BASE_URL` - Backend API URL (default: http://localhost:8000)
