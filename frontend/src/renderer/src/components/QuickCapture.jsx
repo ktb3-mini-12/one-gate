@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import axios from 'axios'
+import { api } from '../lib/api'
 
 export function QuickCapture({ onClose, onSaveSuccess }) {
   const [text, setText] = useState('')
@@ -9,7 +9,7 @@ export function QuickCapture({ onClose, onSaveSuccess }) {
     if (text.trim()) {
       setIsAnalyzing(true)
       try {
-        await axios.post('http://localhost:8000/analyze', {
+        await api.post('/analyze', {
           type: 'text',
           content: text
         })

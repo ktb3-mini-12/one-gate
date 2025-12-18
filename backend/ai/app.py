@@ -177,7 +177,7 @@ def _build_prompt() -> str:
     return ANALYSIS_PROMPT.format(today=_today_kst_str())
 
 
-def _gemini_generate(contents: list) -> dict:
+def _gemini_generate(contents: list, raise_http: bool = True) -> dict:
     """google-genai SDK 호출 (JSON 응답 강제)"""
     c = _require_client()
     prompt = _build_prompt()
@@ -199,7 +199,30 @@ def _gemini_generate(contents: list) -> dict:
         return result
     except Exception as e:
         logger.error(f"Gemini 호출 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
+        if raise_http:
+            raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
+        raise
+
+
+# ============ Service Functions (내부 호출용) ============
+async def analyze_text(text: str) -> dict:
+    """
+    내부 호출용 AI 분석 함수.
+    main.py의 BackgroundTasks에서 호출됨.
+
+    Returns:
+        dict: AIAnalysisData 형식의 분석 결과
+    Raises:
+        Exception: Gemini 호출 실패 시
+    """
+    if not text or not text.strip():
+        raise ValueError("분석할 텍스트가 비어있습니다.")
+    return _gemini_generate([f"분석할 내용:\n{text.strip()}"], raise_http=False)
+
+
+def is_ai_available() -> bool:
+    """AI 분석 가능 여부 확인"""
+    return GENAI_AVAILABLE and client is not None
 
 
 # ============ API Endpoints ============

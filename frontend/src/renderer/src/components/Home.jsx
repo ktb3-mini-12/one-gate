@@ -1,66 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { api } from '../lib/api'
+import { api, API_BASE_URL } from '../lib/api'
+import { getGoogleToken, clearGoogleToken } from '../lib/tokenManager'
 import { CardItem } from './CardItem'
 import { CardDetail } from './CardDetail'
 import { ConfirmModal } from './ConfirmModal'
-
-const { ipcRenderer } = window.require('electron')
-
-// Toast Component
-function Toast({ message, type, onClose }) {
-  useEffect(() => {
-    const timer = setTimeout(onClose, 3000)
-    return () => clearTimeout(timer)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed top-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl flex items-center gap-3 z-50 animate-slide-up"
-      style={{
-        background: type === 'success' ? 'var(--status-completed)' : 'var(--status-error)',
-        boxShadow: 'var(--shadow-lg)'
-      }}
-    >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
-        {type === 'success' ? (
-          <polyline points="20 6 9 17 4 12" />
-        ) : (
-          <>
-            <circle cx="12" cy="12" r="10" />
-            <line x1="15" y1="9" x2="9" y2="15" />
-            <line x1="9" y1="9" x2="15" y2="15" />
-          </>
-        )}
-      </svg>
-      <span style={{ color: '#fff', fontSize: '14px', fontWeight: '500' }}>{message}</span>
-    </div>
-  )
-}
-
-// Icon components
-const SettingsIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-  </svg>
-)
-
-const RefreshIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="1 4 1 10 7 10" />
-    <polyline points="23 20 23 14 17 14" />
-    <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-  </svg>
-)
-
-const LogoutIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-    <polyline points="16 17 21 12 16 7" />
-    <line x1="21" y1="12" x2="9" y2="12" />
-  </svg>
-)
+import { Toast } from './ui/Toast'
+import { SettingsIcon, RefreshIcon, LogoutIcon } from './ui/Icons'
 
 export function Home({ user, session, onNavigateToSettings }) {
   const [activeTab, setActiveTab] = useState('전체')
@@ -71,13 +17,13 @@ export function Home({ user, session, onNavigateToSettings }) {
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(false)
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
-  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [toast, setToast] = useState(null)
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
   }
 
+  // Fetch records from backend
   const fetchRecords = async () => {
     if (!user?.id) return
 
@@ -85,16 +31,19 @@ export function Home({ user, session, onNavigateToSettings }) {
     try {
       const res = await api.get('/records', { params: { user_id: user.id } })
       if (res.data?.status === 'success') {
-        const transformedCards = (res.data?.data || []).map((record) => ({
-          id: String(record.id),
-          summary: record.text,
-          category: record.category?.name || 'general',
-          date: record.created_at ? new Date(record.created_at).toLocaleDateString('ko-KR') : '',
-          status: record.status?.toLowerCase() || 'pending',
-          categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
-          imageUrl: record.image_url || null,
-          rawData: record
-        }))
+        const transformedCards = (res.data?.data || []).map((record) => {
+          const createdAt = record.created_at ? new Date(record.created_at) : null
+
+          return {
+            id: String(record.id),
+            summary: record.result?.summary || record.text,
+            category: record.category?.name || 'general',
+            date: createdAt ? createdAt.toLocaleDateString('ko-KR') : '',
+            status: record.status?.toLowerCase() || 'pending',
+            categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
+            rawData: record
+          }
+        })
         setCards(transformedCards)
       }
     } catch (err) {
@@ -112,9 +61,140 @@ export function Home({ user, session, onNavigateToSettings }) {
       setCards([])
       setLoading(false)
     }
+  }, [user?.id])
 
-    ipcRenderer.on('refresh-data', fetchRecords)
-    return () => ipcRenderer.removeAllListeners('refresh-data')
+  // SSE: analysis completion / record updates with auto-reconnect
+  const [sseStatus, setSseStatus] = useState('connecting')
+
+  useEffect(() => {
+    if (!user?.id) return
+
+    let es = null
+    let reconnectAttempts = 0
+    let reconnectTimer = null
+    const maxReconnectAttempts = 5
+    const baseDelay = 1000
+
+    const applyRecordEvent = (payload) => {
+      const recordId = payload?.record_id
+      if (!recordId) return
+
+      setCards((prev) => {
+        const id = String(recordId)
+        const exists = prev.some((c) => c.id === id)
+        if (!exists) {
+          queueMicrotask(() => fetchRecords())
+          return prev
+        }
+
+        return prev.map((card) => {
+          if (card.id !== id) return card
+
+          const nextRaw = {
+            ...card.rawData,
+            status: payload?.status || card.rawData?.status,
+            result: payload?.analysis_data || card.rawData?.result
+          }
+
+          if (payload?.analysis_data?.type) {
+            nextRaw.type = payload.analysis_data.type
+          }
+
+          return {
+            ...card,
+            rawData: nextRaw,
+            status: (nextRaw.status || card.rawData?.status || 'PENDING').toLowerCase(),
+            summary: nextRaw.result?.summary || nextRaw.text || card.summary,
+            categoryType: nextRaw.type === 'CALENDAR' ? '일정' : '메모'
+          }
+        })
+      })
+    }
+
+    const connect = () => {
+      const streamUrl = `${API_BASE_URL}/records/stream?user_id=${encodeURIComponent(user.id)}`
+      es = new EventSource(streamUrl)
+      setSseStatus('connecting')
+
+      es.addEventListener('connected', () => {
+        setSseStatus('connected')
+        reconnectAttempts = 0
+      })
+
+      // record_created: 새 PENDING 카드 추가 (전체 재조회 없이 즉시 추가)
+      es.addEventListener('record_created', (evt) => {
+        try {
+          const payload = JSON.parse(evt.data)
+          const recordId = payload?.record_id
+          if (!recordId) return
+
+          // 새 카드를 목록 최상단에 추가
+          const newCard = {
+            id: String(recordId),
+            summary: payload.text || '진행 중...',
+            category: 'general',
+            date: payload.created_at
+              ? new Date(payload.created_at).toLocaleDateString('ko-KR')
+              : new Date().toLocaleDateString('ko-KR'),
+            status: 'pending',
+            categoryType: payload.type === 'CALENDAR' ? '일정' : '메모',
+            rawData: {
+              id: recordId,
+              status: 'PENDING',
+              type: payload.type || 'MEMO',
+              text: payload.text,
+              created_at: payload.created_at
+            }
+          }
+
+          setCards((prev) => {
+            // 이미 존재하면 추가하지 않음
+            if (prev.some((c) => c.id === String(recordId))) return prev
+            return [newCard, ...prev]
+          })
+        } catch (e) {
+          console.error('SSE record_created parse error:', e)
+        }
+      })
+
+      es.addEventListener('analysis_completed', (evt) => {
+        try {
+          applyRecordEvent(JSON.parse(evt.data))
+        } catch (e) {
+          console.error('SSE parse error:', e)
+        }
+      })
+
+      es.addEventListener('record_updated', (evt) => {
+        try {
+          applyRecordEvent(JSON.parse(evt.data))
+        } catch (e) {
+          console.error('SSE parse error:', e)
+        }
+      })
+
+      es.onerror = () => {
+        es.close()
+        setSseStatus('disconnected')
+
+        if (reconnectAttempts < maxReconnectAttempts) {
+          const delay = baseDelay * Math.pow(2, reconnectAttempts)
+          reconnectAttempts++
+          console.log(`SSE reconnecting in ${delay}ms (attempt ${reconnectAttempts})`)
+          reconnectTimer = setTimeout(connect, delay)
+        } else {
+          console.error('SSE max reconnect attempts reached')
+          showToast('실시간 연결이 끊어졌습니다. 새로고침해주세요.', 'error')
+        }
+      }
+    }
+
+    connect()
+
+    return () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (es) es.close()
+    }
   }, [user?.id])
 
   const filteredCards = cards.filter(
@@ -140,59 +220,72 @@ export function Home({ user, session, onNavigateToSettings }) {
     setSelectedCards(newSelected)
   }
 
-  const completeRecord = async (recordId) => {
-    try {
-      await api.post(`/records/${recordId}/complete`)
-      return true
-    } catch (err) {
-      console.error('완료 처리 실패:', err)
-      return false
-    }
-  }
-
+  // 카드를 UI에서 제거
   const removeCardFromUI = (cardId) => {
     setCards((prev) => prev.filter((card) => card.id !== String(cardId)))
   }
 
   const handleBulkUpload = async () => {
-    const googleToken = localStorage.getItem('google_provider_token')
+    const googleToken = getGoogleToken()
+    const isDev = import.meta.env.DEV
 
     setIsUploading(true)
     let successCount = 0
+    let failedCount = 0
+    const newFailedCards = new Map()
 
     try {
       for (const cardId of selectedCards) {
         const card = cards.find((c) => c.id === cardId)
         if (!card) continue
 
-        let uploadSuccess = false
-
-        if (card.rawData.type === 'CALENDAR') {
-          if (!googleToken) continue
-          try {
-            await addToCalendar(card.rawData, googleToken)
-            uploadSuccess = true
-          } catch (err) {
-            console.error('캘린더 등록 실패:', err)
-          }
-        } else {
-          try {
-            await addToNotion(card.rawData)
-            uploadSuccess = true
-          } catch (err) {
-            console.error('노션 등록 실패:', err)
-          }
+        if (card.rawData?.status !== 'ANALYZED') {
+          continue
         }
 
-        if (uploadSuccess) {
-          await completeRecord(cardId)
-          removeCardFromUI(cardId)
-          successCount++
+        const recordType = card.rawData?.result?.type || card.rawData?.type
+        if (recordType === 'CALENDAR' && !googleToken) {
+          const reason = isDev ? 'Google 토큰 없음/만료' : '로그인 필요'
+          newFailedCards.set(cardId, reason)
+          failedCount++
+          continue
         }
+
+        try {
+          const res = await api.post(
+            `/records/${cardId}/upload`,
+            { final_data: null },
+            {
+              headers: recordType === 'CALENDAR' ? { 'X-Google-Token': googleToken } : {}
+            }
+          )
+
+          if (res.data?.status === 'success') {
+            removeCardFromUI(cardId)
+            successCount++
+          }
+        } catch (err) {
+          console.error(`업로드 실패 (${cardId}):`, err)
+          const reason = getFailReason(err, recordType)
+          newFailedCards.set(cardId, reason)
+          failedCount++
+        }
+      }
+
+      // 실패한 카드 표시
+      if (newFailedCards.size > 0) {
+        setFailedCards((prev) => {
+          const next = new Map(prev)
+          newFailedCards.forEach((reason, cardId) => next.set(cardId, reason))
+          return next
+        })
       }
 
       if (successCount > 0) {
         showToast(`${successCount}개 항목이 업로드되었습니다.`, 'success')
+      }
+      if (failedCount > 0) {
+        showToast(`${failedCount}개 항목 업로드에 실패했습니다.`, 'error')
       }
 
       setSelectedCards(new Set())
@@ -203,47 +296,6 @@ export function Home({ user, session, onNavigateToSettings }) {
     } finally {
       setIsUploading(false)
     }
-  }
-
-  const addToCalendar = async (record, googleToken) => {
-    const tomorrow = new Date()
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    tomorrow.setHours(14, 0, 0, 0)
-    const endTime = new Date(tomorrow)
-    endTime.setHours(15, 0, 0, 0)
-
-    const formatDateTime = (date) => date.toISOString().slice(0, 19)
-
-    const res = await api.post(
-      '/calendar/create',
-      {
-        summary: record.text,
-        description: 'One Gate에서 등록된 일정',
-        start_time: formatDateTime(tomorrow),
-        end_time: formatDateTime(endTime)
-      },
-      { headers: { 'X-Google-Token': googleToken } }
-    )
-
-    if (res.data?.status !== 'success') {
-      throw new Error(res.data?.message || 'Calendar upload failed')
-    }
-    return res.data
-  }
-
-  const addToNotion = async (record) => {
-    const res = await api.post('/notion/save-memo', {
-      user_id: user.id,
-      title: record.text,
-      category: record.category?.name || '메모',
-      content_type: record.type || 'MEMO',
-      body: record.result?.body || null
-    })
-
-    if (res.data?.status !== 'success') {
-      throw new Error(res.data?.message || 'Notion upload failed')
-    }
-    return res.data
   }
 
   const handleBulkDeleteClick = () => {
@@ -267,40 +319,119 @@ export function Home({ user, session, onNavigateToSettings }) {
   }
 
   const handleCardClick = (id) => {
-    if (isBulkSelectMode) {
-      handleCardSelect(id)
-    } else {
+    if (!isBulkSelectMode) {
       setSelectedCardId(id)
     }
   }
 
-  const handleUploadSingle = async () => {
+  // 업로드 실패한 카드 추적 (cardId → reason)
+  const [failedCards, setFailedCards] = useState(new Map())
+
+  // 에러 원인 추출 함수 (dev: 기술적 메시지, prod: 유저 친화적 메시지)
+  const getFailReason = (error, recordType) => {
+    const isDev = import.meta.env.DEV
+
+    // 네트워크 오류 (error.response 없음)
+    if (!error.response) {
+      if (error.code === 'ECONNABORTED') {
+        return isDev ? '타임아웃' : '타임아웃 초과'
+      }
+      return isDev ? '네트워크 오류' : '인터넷 연결 오류'
+    }
+
+    const status = error.response.status
+    const detail = error.response.data?.detail || ''
+
+    // 서버 오류 (500+)
+    if (status >= 500) {
+      return isDev ? '서버 오류' : '서버 에러'
+    }
+
+    // Google Calendar 관련
+    if (recordType === 'CALENDAR') {
+      if (status === 401 || detail.includes('token')) {
+        return isDev ? 'Google 토큰 없음/만료' : '로그인 필요'
+      }
+      if (status === 403) {
+        return isDev ? 'Google 권한 없음' : '권한 없음'
+      }
+      if (status === 404) {
+        return isDev ? '캘린더 없음' : 'Google Calendar 연동 필요'
+      }
+      return isDev ? 'Google API 오류' : '잠시 후 다시 시도해주세요'
+    }
+
+    // Notion 관련
+    if (detail.includes('not connected')) {
+      return isDev ? 'Notion 연결 안됨' : 'Notion 연동 필요'
+    }
+    if (detail.includes('expired')) {
+      return isDev ? 'Notion 토큰 만료' : 'Notion 재연동 필요'
+    }
+    if (detail.includes('database') || detail.includes('No accessible')) {
+      return isDev ? 'Notion DB 없음' : 'Notion 설정 확인 필요'
+    }
+
+    // Notion 기타 오류
+    if (recordType === 'MEMO') {
+      return isDev ? 'Notion API 오류' : '잠시 후 다시 시도해주세요'
+    }
+
+    return isDev ? '알 수 없는 오류' : '다시 시도해주세요'
+  }
+
+  const handleUploadSingle = async (finalData = null) => {
     if (!selectedCardId) return
 
-    const googleToken = localStorage.getItem('google_provider_token')
+    const googleToken = getGoogleToken()
     const card = cards.find((c) => c.id === selectedCardId)
-    if (!card?.rawData?.type) return
+    if (!card?.rawData) return
+
+    if (card.rawData?.status !== 'ANALYZED') {
+      showToast('분석이 완료된 항목만 업로드할 수 있습니다.', 'error')
+      return
+    }
+
+    // CALENDAR 타입인데 Google 토큰이 없으면 에러
+    const recordType = finalData?.type || card.rawData?.result?.type || card.rawData?.type
+    if (recordType === 'CALENDAR' && !googleToken) {
+      showToast('Google 토큰이 없습니다. 재로그인 해주세요.', 'error')
+      return
+    }
 
     setIsUploading(true)
+    // 실패 상태 초기화
+    setFailedCards((prev) => {
+      const next = new Map(prev)
+      next.delete(selectedCardId)
+      return next
+    })
 
     try {
-      if (card.rawData.type === 'CALENDAR') {
-        if (!googleToken) {
-          showToast('Google 토큰이 없습니다. 재로그인 해주세요.', 'error')
-          return
+      const res = await api.post(
+        `/records/${selectedCardId}/upload`,
+        { final_data: finalData },
+        {
+          headers: recordType === 'CALENDAR' ? { 'X-Google-Token': googleToken } : {}
         }
-        await addToCalendar(card.rawData, googleToken)
-        showToast('Google 캘린더에 등록되었습니다.', 'success')
-      } else {
-        await addToNotion(card.rawData)
-        showToast('Notion에 업로드되었습니다.', 'success')
-      }
+      )
 
-      await completeRecord(selectedCardId)
-      removeCardFromUI(selectedCardId)
+      if (res.data?.status === 'success') {
+        const uploadType = res.data?.data?.type
+        if (uploadType === 'calendar') {
+          showToast('Google 캘린더에 등록되었습니다.', 'success')
+        } else {
+          showToast('Notion에 업로드되었습니다.', 'success')
+        }
+        // 성공 시 화면에서 제거
+        removeCardFromUI(selectedCardId)
+      }
     } catch (err) {
       console.error('업로드 실패:', err)
-      showToast('업로드 중 오류가 발생했습니다.', 'error')
+      const reason = getFailReason(err, recordType)
+      showToast(`업로드 실패: ${reason}`, 'error')
+      // 실패 시 카드에 실패 원인 저장
+      setFailedCards((prev) => new Map(prev).set(selectedCardId, reason))
     } finally {
       setIsUploading(false)
       setSelectedCardId(null)
@@ -321,21 +452,15 @@ export function Home({ user, session, onNavigateToSettings }) {
     }
   }
 
-  const handleLogoutClick = () => {
-    setShowLogoutConfirm(true)
-  }
-
   const handleLogout = () => {
-    setShowLogoutConfirm(false)
-    localStorage.removeItem('google_provider_token')
+    clearGoogleToken()
     supabase.auth.signOut()
   }
 
   return (
     <div className="min-h-full p-8 pb-16" style={{ background: 'var(--app-bg)' }}>
-      {toast && (
-        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
-      )}
+      {/* Toast */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
       {/* Header */}
       <div className="max-w-6xl mx-auto mb-8">
@@ -345,48 +470,79 @@ export function Home({ user, session, onNavigateToSettings }) {
               <img
                 src={user.user_metadata.avatar_url}
                 alt="profile"
-                className="w-10 h-10 rounded-full"
+                className="w-9 h-9 rounded-full"
                 style={{ border: '2px solid var(--divider)' }}
               />
             )}
-            <div>
-              <h3 style={{ color: 'var(--text-primary)', fontSize: '16px', fontWeight: '600', margin: 0 }}>
-                {user?.user_metadata?.name || user?.email?.split('@')[0]}
-              </h3>
-              <small style={{ color: 'var(--text-tertiary)' }}>
-                {filteredCards.length}개의 항목
-              </small>
-            </div>
+            <h3 style={{ color: 'var(--text-secondary)' }}>
+              {user?.user_metadata?.name || user?.email}
+            </h3>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
+            {/* SSE Connection Status */}
+            <div
+              className="flex items-center gap-1.5"
+              title={
+                sseStatus === 'connected'
+                  ? '실시간 연결됨'
+                  : sseStatus === 'connecting'
+                    ? '연결 중...'
+                    : '연결 끊김'
+              }
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${sseStatus === 'connecting' ? 'animate-pulse' : ''}`}
+                style={{
+                  background:
+                    sseStatus === 'connected'
+                      ? '#10B981'
+                      : sseStatus === 'connecting'
+                        ? '#F59E0B'
+                        : '#EF4444',
+                  boxShadow:
+                    sseStatus === 'connected'
+                      ? '0 0 6px rgba(16, 185, 129, 0.5)'
+                      : sseStatus === 'connecting'
+                        ? '0 0 6px rgba(245, 158, 11, 0.5)'
+                        : '0 0 6px rgba(239, 68, 68, 0.5)'
+                }}
+              />
+            </div>
+
+            {/* Upload progress indicator */}
             {isUploading && (
-              <div className="flex items-center gap-2 mr-2 px-3 py-1.5 rounded-lg" style={{ background: 'var(--surface-secondary)' }}>
-                <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--action-primary)' }} />
-                <small style={{ color: 'var(--text-secondary)' }}>업로드 중...</small>
+              <div className="flex items-center gap-2 mr-2">
+                <div
+                  className="w-2 h-2 rounded-full animate-pulse"
+                  style={{ background: 'var(--action-primary)' }}
+                />
+                <small style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+                  업로드 중...
+                </small>
               </div>
             )}
 
             <button
               onClick={fetchRecords}
-              className="p-2.5 rounded-xl transition-all hover:opacity-70"
-              style={{ color: 'var(--text-secondary)', background: 'var(--surface-primary)' }}
+              className="p-2 rounded-xl transition-all hover:opacity-80"
+              style={{ color: 'var(--text-secondary)' }}
             >
               <RefreshIcon />
             </button>
 
             <button
-              onClick={handleLogoutClick}
-              className="p-2.5 rounded-xl transition-all hover:opacity-70"
-              style={{ color: 'var(--text-secondary)', background: 'var(--surface-primary)' }}
+              onClick={handleLogout}
+              className="p-2 rounded-xl transition-all hover:opacity-80"
+              style={{ color: 'var(--text-secondary)' }}
             >
               <LogoutIcon />
             </button>
 
             <button
               onClick={onNavigateToSettings}
-              className="p-2.5 rounded-xl transition-all hover:opacity-70"
-              style={{ color: 'var(--text-secondary)', background: 'var(--surface-primary)' }}
+              className="p-2 rounded-xl transition-all hover:opacity-80"
+              style={{ color: 'var(--text-secondary)' }}
             >
               <SettingsIcon />
             </button>
@@ -395,17 +551,18 @@ export function Home({ user, session, onNavigateToSettings }) {
 
         {/* Tabs and actions */}
         <div className="flex items-center justify-between">
-          <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--surface-primary)' }}>
+          <div className="flex gap-6">
             {['전체', '일정', '메모'].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className="px-5 py-2 rounded-lg transition-all"
+                className="pb-2 transition-all"
                 style={{
-                  fontSize: '14px',
+                  fontSize: '16px',
                   fontWeight: activeTab === tab ? '600' : '500',
-                  background: activeTab === tab ? 'var(--surface-elevated)' : 'transparent',
-                  color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-secondary)'
+                  color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  borderBottom:
+                    activeTab === tab ? '2px solid var(--action-primary)' : '2px solid transparent'
                 }}
               >
                 {tab}
@@ -421,8 +578,9 @@ export function Home({ user, session, onNavigateToSettings }) {
                   disabled={selectedCards.size === 0 || isUploading}
                   className="px-5 py-2 rounded-xl transition-all disabled:opacity-40"
                   style={{
-                    background: 'var(--action-primary)',
-                    color: '#fff',
+                    background:
+                      'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
+                    color: '#FFFFFF',
                     fontWeight: '500',
                     fontSize: '14px'
                   }}
@@ -450,7 +608,7 @@ export function Home({ user, session, onNavigateToSettings }) {
               onClick={handleToggleBulkSelect}
               className="px-4 py-2 rounded-xl transition-all"
               style={{
-                background: isBulkSelectMode ? 'var(--action-primary)' : 'var(--surface-primary)',
+                background: isBulkSelectMode ? 'var(--action-primary)' : 'transparent',
                 color: isBulkSelectMode ? '#fff' : 'var(--text-secondary)',
                 fontWeight: '500',
                 fontSize: '14px'
@@ -465,20 +623,25 @@ export function Home({ user, session, onNavigateToSettings }) {
       {/* Cards grid */}
       <div className="max-w-6xl mx-auto">
         {loading ? (
-          <div className="text-center py-20">
-            <div
-              className="w-8 h-8 mx-auto mb-4 rounded-full animate-spin"
-              style={{ border: '2px solid var(--divider)', borderTopColor: 'var(--action-primary)' }}
-            />
-            <p style={{ color: 'var(--text-secondary)' }}>로딩 중...</p>
+          <div className="text-center py-20" style={{ color: 'var(--text-secondary)' }}>
+            <div className="flex justify-center mb-4">
+              <div
+                className="w-8 h-8 rounded-full animate-spin"
+                style={{
+                  border: '2px solid var(--divider)',
+                  borderTopColor: 'var(--action-primary)'
+                }}
+              />
+            </div>
+            <div>로딩 중...</div>
           </div>
         ) : filteredCards.length === 0 ? (
-          <div className="text-center py-20">
+          <div className="text-center py-20" style={{ color: 'var(--text-secondary)' }}>
             <div className="text-4xl mb-4">📭</div>
-            <p style={{ color: 'var(--text-primary)', fontWeight: '500' }}>저장된 항목이 없습니다</p>
-            <small style={{ color: 'var(--text-tertiary)' }}>
+            <div style={{ fontSize: '16px', fontWeight: '500' }}>저장된 항목이 없습니다</div>
+            <div className="text-sm mt-2" style={{ color: 'var(--text-tertiary)' }}>
               Cmd+Shift+Space로 새 항목을 추가하세요
-            </small>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -490,16 +653,20 @@ export function Home({ user, session, onNavigateToSettings }) {
                 showCheckbox={isBulkSelectMode}
                 onSelect={handleCardSelect}
                 onClick={handleCardClick}
+                uploadFailed={failedCards.has(card.id)}
+                failReason={failedCards.get(card.id)}
               />
             ))}
           </div>
         )}
       </div>
 
-      {/* Card Detail */}
+      {/* Card Detail Popover */}
       {selectedCard && (
         <CardDetail
           {...selectedCard}
+          uploadFailed={failedCards.has(selectedCard.id)}
+          failReason={failedCards.get(selectedCard.id)}
           onClose={() => setSelectedCardId(null)}
           onUpload={handleUploadSingle}
           onDelete={handleDeleteSingle}
@@ -507,7 +674,7 @@ export function Home({ user, session, onNavigateToSettings }) {
         />
       )}
 
-      {/* Bulk Delete Confirmation */}
+      {/* Bulk Delete Confirmation Modal */}
       <ConfirmModal
         isOpen={showBulkDeleteConfirm}
         title="삭제 확인"
@@ -519,27 +686,17 @@ export function Home({ user, session, onNavigateToSettings }) {
         isDanger={true}
       />
 
-      {/* Logout Confirmation */}
-      <ConfirmModal
-        isOpen={showLogoutConfirm}
-        title="로그아웃"
-        message="정말 로그아웃 하시겠습니까?"
-        confirmText="로그아웃"
-        cancelText="취소"
-        onConfirm={handleLogout}
-        onCancel={() => setShowLogoutConfirm(false)}
-        isDanger={false}
-      />
-
-      {/* Hide scrollbar */}
+      {/* Animation styles */}
       <style>{`
-        ::-webkit-scrollbar {
-          display: none;
-        }
-        html, body {
-          overflow: hidden;
-          -ms-overflow-style: none;
-          scrollbar-width: none;
+        @keyframes slide-down {
+          from {
+            opacity: 0;
+            transform: translate(-50%, -20px);
+          }
+          to {
+            opacity: 1;
+            transform: translate(-50%, 0);
+          }
         }
       `}</style>
     </div>

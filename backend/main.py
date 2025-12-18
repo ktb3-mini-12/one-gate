@@ -1,40 +1,63 @@
-from fastapi import FastAPI, HTTPException, Header, Query, File, UploadFile, Form
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List
-from datetime import datetime
+import asyncio
+import base64
+import json
+import os
 import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
+
+import httpx
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from notion_client import Client as NotionClient
-import httpx
-import base64
+from pydantic import BaseModel, field_validator
+from starlette.responses import StreamingResponse
 
 from database import (
-    supabase, notion, NOTION_DB_ID,
-    NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
+    NOTION_CLIENT_ID,
+    NOTION_CLIENT_SECRET,
+    NOTION_DB_ID,
+    NOTION_REDIRECT_URI,
+    notion,
+    supabase,
 )
 
-# AI 라우터 (Gemini)
-try:
-    from ai.app import router as ai_router
-except Exception as e:
-    ai_router = None
-    print(f"[AI] 라우터 로드 실패: {e}")
+
+def _load_ai_module():
+    """AI 모듈 로드 (라우터 + 서비스 함수)"""
+    try:
+        from ai.app import router as ai_router, analyze_text, is_ai_available
+        return ai_router, analyze_text, is_ai_available
+    except Exception as e:
+        print(f"[AI] 모듈 로드 실패: {e}")
+        return None, None, lambda: False
+
+
+ai_router, ai_analyze_text, ai_is_available = _load_ai_module()
 
 app = FastAPI()
 
-# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 if ai_router is not None:
     app.include_router(ai_router)
-# --- [DTO] ---
+    print("[AI] Gemini AI 라우터 활성화됨")
+else:
+    print("[AI] AI 라우터 비활성화 - fallback 분류 모드")
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 
 class AnalyzeRequest(BaseModel):
     text: str
@@ -42,42 +65,246 @@ class AnalyzeRequest(BaseModel):
     image_url: Optional[str] = None
     category_id: Optional[int] = None
 
+
+def _parse_iso_datetime(value: str) -> datetime:
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
+
+
+def _parse_iso_date(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.fromisoformat(value + "T00:00:00")
+
+
+class AIAnalysisData(BaseModel):
+    # ========== 공통 필수 ==========
+    type: Literal["CALENDAR", "MEMO"]
+    summary: str
+
+    # ========== 공통 선택 ==========
+    content: Optional[str] = None
+    category: Optional[str] = None
+    priority: Optional[Literal["low", "medium", "high"]] = None
+    url: Optional[str] = None
+    attachments: Optional[List[str]] = None
+
+    # ========== CALENDAR 전용 ==========
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    all_day: Optional[bool] = None
+    timezone: Optional[str] = None
+    location: Optional[str] = None
+    attendees: Optional[List[str]] = None
+    reminders: Optional[List[dict]] = None
+    recurrence: Optional[str] = None
+    meeting_url: Optional[str] = None
+    create_meet: Optional[bool] = None
+    status: Optional[str] = None
+    visibility: Optional[str] = None
+    busy: Optional[bool] = None
+
+    # ========== MEMO 전용 ==========
+    body: Optional[str] = None
+    due_date: Optional[str] = None
+    assignee: Optional[str] = None
+    memo_status: Optional[str] = None
+    icon: Optional[str] = None
+
+    @field_validator("start_time", "end_time", mode="before")
+    @classmethod
+    def validate_datetime_format(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if not isinstance(value, str):
+            raise ValueError("must be a string datetime")
+        _parse_iso_datetime(value)
+        return value
+
+    @field_validator("due_date", mode="before")
+    @classmethod
+    def validate_due_date_format(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if not isinstance(value, str):
+            raise ValueError("must be a string date")
+        _parse_iso_date(value)
+        return value
+
+
+class UpdateRecordRequest(BaseModel):
+    analysis_data: Optional[Dict[str, Any]] = None
+    text: Optional[str] = None
+
+
 class NotionMemoRequest(BaseModel):
     content: str
     category: str = "아이디어"
+
 
 class CategoryRequest(BaseModel):
     name: str
     type: str  # MEMO / CALENDAR
     user_id: Optional[str] = None
 
+
 class CalendarEvent(BaseModel):
     summary: str
     description: Optional[str] = ""
-    start_time: str  # "2025-12-20T10:00:00"
+    start_time: str
     end_time: str
-    calendar_name: Optional[str] = None  # 특정 캘린더 이름
-    category: Optional[str] = None  # Work, Personal 등 -> colorId 매핑
+    calendar_name: Optional[str] = None
+    category: Optional[str] = None
 
-# 카테고리 -> Google Calendar colorId 매핑
+
 CATEGORY_COLOR_MAP = {
-    "work": "11",      # Red
-    "personal": "2",   # Green
-    "meeting": "5",    # Yellow
-    "important": "4",  # Pink
-    "default": "1"     # Blue
+    "work": "11",
+    "personal": "2",
+    "meeting": "5",
+    "important": "4",
+    "default": "1",
 }
 
-# ----------------------------------
+
+def _convert_recurrence_to_rrule(recurrence: Optional[str]) -> Optional[List[str]]:
+    """AI 출력(daily/weekly/monthly/yearly)을 Google Calendar RRULE 형식으로 변환"""
+    if not recurrence:
+        return None
+    mapping = {
+        "daily": "RRULE:FREQ=DAILY",
+        "weekly": "RRULE:FREQ=WEEKLY",
+        "monthly": "RRULE:FREQ=MONTHLY",
+        "yearly": "RRULE:FREQ=YEARLY",
+    }
+    rrule = mapping.get(recurrence.lower())
+    return [rrule] if rrule else None
+
+
+class _SseBroker:
+    def __init__(self) -> None:
+        self._queues_by_user: Dict[str, set[asyncio.Queue[str]]] = {}
+        self._lock = asyncio.Lock()
+
+    async def subscribe(self, user_id: str) -> asyncio.Queue[str]:
+        queue: asyncio.Queue[str] = asyncio.Queue()
+        async with self._lock:
+            self._queues_by_user.setdefault(user_id, set()).add(queue)
+        return queue
+
+    async def unsubscribe(self, user_id: str, queue: asyncio.Queue[str]) -> None:
+        async with self._lock:
+            queues = self._queues_by_user.get(user_id)
+            if not queues:
+                return
+            queues.discard(queue)
+            if not queues:
+                self._queues_by_user.pop(user_id, None)
+
+    async def publish(self, user_id: str, event: str, data: Dict[str, Any]) -> None:
+        payload = json.dumps(data, ensure_ascii=False)
+        message = f"event: {event}\ndata: {payload}\n\n"
+        async with self._lock:
+            queues = list(self._queues_by_user.get(user_id, set()))
+        for queue in queues:
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                pass
+
+
+_broker = _SseBroker()
+
+
+def _fallback_analyze(text: str) -> dict:
+    """AI 분석 실패 시 키워드 기반 fallback 분류"""
+    text_lower = text.lower()
+
+    # 일정 키워드
+    calendar_keywords = [
+        "내일", "모레", "다음주", "이번주", "오늘",
+        "시에", "시 ", "분에", "약속", "미팅", "회의",
+        "점심", "저녁", "아침", "오전", "오후",
+        "월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일",
+        "일정", "예약", "방문", "출장", "면접",
+    ]
+
+    is_calendar = any(kw in text_lower for kw in calendar_keywords)
+    input_type = "CALENDAR" if is_calendar else "MEMO"
+
+    return {
+        "type": input_type,
+        "summary": text[:50] if len(text) > 50 else text,
+        "content": text,
+        "category": "일정" if is_calendar else "메모",
+    }
+
+
+async def _run_ai_analysis(record_id: int, user_id: str, text: str) -> None:
+    """
+    백그라운드에서 AI 분석을 수행하고 결과를 DB에 저장.
+    분석 완료 후 SSE로 클라이언트에 알림.
+    """
+    try:
+        # AI 모듈이 사용 가능한 경우 Gemini 분석
+        if ai_analyze_text is not None and ai_is_available():
+            print(f"[AI] 레코드 {record_id} Gemini 분석 시작")
+            analysis_result = await ai_analyze_text(text)
+        else:
+            print(f"[AI] 레코드 {record_id} fallback 분류 사용")
+            analysis_result = _fallback_analyze(text)
+
+        # 분석 결과 검증 및 저장
+        validated = AIAnalysisData(**analysis_result)
+        analysis_payload = validated.model_dump(exclude_none=True)
+
+        supabase.table("inputs").update({
+            "status": "ANALYZED",
+            "type": validated.type,
+            "result": analysis_payload,
+        }).eq("id", record_id).execute()
+
+        # analysis_completed SSE 이벤트 발행
+        await _broker.publish(
+            str(user_id),
+            "analysis_completed",
+            {"record_id": record_id, "status": "ANALYZED", "analysis_data": analysis_payload},
+        )
+        print(f"[AI] 레코드 {record_id} 분석 완료: {validated.type}")
+
+    except Exception as e:
+        print(f"[AI] 레코드 {record_id} 분석 실패: {e}, fallback 적용")
+
+        # 에러 발생 시 fallback 분류 적용
+        fallback_result = _fallback_analyze(text)
+        validated = AIAnalysisData(**fallback_result)
+        analysis_payload = validated.model_dump(exclude_none=True)
+
+        supabase.table("inputs").update({
+            "status": "ANALYZED",
+            "type": validated.type,
+            "result": analysis_payload,
+        }).eq("id", record_id).execute()
+
+        await _broker.publish(
+            str(user_id),
+            "analysis_completed",
+            {"record_id": record_id, "status": "ANALYZED", "analysis_data": analysis_payload},
+        )
+
 
 @app.post("/analyze")
 async def analyze_content(
+    background_tasks: BackgroundTasks,
     user_id: str = Form(...),
     text: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
     """
     텍스트 또는 이미지 분석 (FormData로 수신)
+    DB에 PENDING 상태로 저장하고, 백그라운드에서 AI 분석을 시작.
+    즉시 record_created SSE 이벤트를 발행하여 FE에서 카드를 표시할 수 있게 함.
     """
     display_text = text[:30] if text else "(이미지만)"
     print(f"[분석] user_id: {user_id}, 내용: {display_text}..., 이미지: {'있음' if image else '없음'}")
@@ -119,7 +346,7 @@ async def analyze_content(
     if not text and not image_url:
         raise HTTPException(status_code=400, detail="텍스트 또는 이미지가 필요합니다")
 
-    # 간단한 분류 로직 (추후 AI로 대체)
+    # 초기 타입은 키워드 기반으로 추정 (AI 분석 후 변경될 수 있음)
     text_for_analysis = text or ""
     is_calendar = "내일" in text_for_analysis or "시" in text_for_analysis or "일정" in text_for_analysis
     input_type = "CALENDAR" if is_calendar else "MEMO"
@@ -136,242 +363,476 @@ async def analyze_content(
         result = supabase.table("inputs").insert(input_data).execute()
         record = result.data[0] if result.data else None
 
+        if not record or record.get("id") is None:
+            raise HTTPException(status_code=500, detail="레코드 생성 실패")
+
+        record_id = int(record["id"])
+
+        # record_created SSE 이벤트 즉시 발행
+        await _broker.publish(
+            request.user_id,
+            "record_created",
+            {
+                "record_id": record_id,
+                "status": "PENDING",
+                "type": input_type,
+                "text": request.text,
+                "created_at": record.get("created_at"),
+            },
+        )
+
+        # 백그라운드에서 AI 분석 시작
+        background_tasks.add_task(
+            _run_ai_analysis,
+            record_id,
+            request.user_id,
+            request.text,
+        )
+
         return {
             "status": "success",
             "data": {
-                "id": record["id"] if record else None,
+                "id": record_id,
                 "type": input_type,
                 "text": text,
                 "has_image": image_url is not None,
                 "status": "PENDING",
-                "created_at": record["created_at"] if record else None
-            }
+                "created_at": record.get("created_at"),
+            },
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/records/stream")
+async def stream_records(user_id: str, request: Request):
+    queue = await _broker.subscribe(user_id)
+
+    async def _event_generator():
+        try:
+            yield "event: connected\ndata: {}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield message
+                except asyncio.TimeoutError:
+                    yield "event: ping\ndata: {}\n\n"
+                except asyncio.CancelledError:
+                    break
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await _broker.unsubscribe(user_id, queue)
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/records/{record_id}/analysis")
+async def receive_ai_analysis(record_id: int, analysis: AIAnalysisData):
+    fetch = supabase.table("inputs").select("id,user_id").eq("id", record_id).limit(1).execute()
+    record = fetch.data[0] if fetch.data else None
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    user_id = record.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Record missing user_id")
+
+    analysis_payload = analysis.model_dump(exclude_none=True)
+    update_payload = {"status": "ANALYZED", "result": analysis_payload, "type": analysis.type}
+
+    updated = supabase.table("inputs").update(update_payload).eq("id", record_id).execute()
+    if not updated.data:
+        raise HTTPException(status_code=500, detail="Failed to update record")
+
+    await _broker.publish(
+        str(user_id),
+        "analysis_completed",
+        {"record_id": record_id, "status": "ANALYZED", "analysis_data": analysis_payload},
+    )
+    return {"status": "success"}
+
+
+@app.patch("/records/{record_id}")
+async def update_record(record_id: int, request: UpdateRecordRequest):
+    fetch = (
+        supabase.table("inputs").select("id,user_id,result").eq("id", record_id).limit(1).execute()
+    )
+    record = fetch.data[0] if fetch.data else None
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    user_id = record.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Record missing user_id")
+
+    update_payload: Dict[str, Any] = {}
+    if request.text is not None:
+        update_payload["text"] = request.text
+    if request.analysis_data is not None:
+        validated = AIAnalysisData(**request.analysis_data).model_dump(exclude_none=True)
+        update_payload["result"] = validated
+        update_payload["type"] = validated["type"]
+        update_payload["status"] = "ANALYZED"
+
+    if not update_payload:
+        return {"status": "success", "message": "No changes"}
+
+    updated = supabase.table("inputs").update(update_payload).eq("id", record_id).execute()
+    if not updated.data:
+        raise HTTPException(status_code=500, detail="Failed to update record")
+
+    await _broker.publish(
+        str(user_id),
+        "record_updated",
+        {
+            "record_id": record_id,
+            "status": update_payload.get("status"),
+            "analysis_data": update_payload.get("result"),
+        },
+    )
+    return {"status": "success", "data": updated.data[0]}
+
 
 @app.get("/records")
 async def get_records(user_id: str, status: Optional[str] = None):
-    """
-    사용자의 레코드 목록 조회 (soft delete 제외)
-    - status: PENDING, ANALYZED, COMPLETED, CANCELED 필터링
-    """
-    query = supabase.table("inputs")\
-        .select("*, category(id, name, type)")\
-        .eq("user_id", user_id)\
+    query = (
+        supabase.table("inputs")
+        .select("*, category(id, name, type)")
+        .eq("user_id", user_id)
         .is_("deleted_at", "null")
-
+    )
     if status:
         query = query.eq("status", status)
-
     result = query.order("created_at", desc=True).execute()
-
     return {"status": "success", "data": result.data}
+
 
 @app.delete("/records/{record_id}")
 async def delete_record(record_id: int):
-    """
-    레코드 소프트 삭제 (status=CANCELED, deleted_at 설정)
-    """
-    result = supabase.table("inputs")\
-        .update({
-            "status": "CANCELED",
-            "deleted_at": datetime.utcnow().isoformat()
-        })\
-        .eq("id", record_id)\
+    result = (
+        supabase.table("inputs")
+        .update({"status": "CANCELED", "deleted_at": datetime.utcnow().isoformat()})
+        .eq("id", record_id)
         .execute()
-
+    )
     if result.data:
         return {"status": "success", "message": "Record canceled"}
     return {"status": "error", "message": "Record not found"}
 
+
 @app.post("/records/{record_id}/complete")
 async def complete_record(record_id: int):
-    """
-    레코드 완료 처리 (status=COMPLETED, 업로드 후 soft delete)
-    """
-    result = supabase.table("inputs")\
-        .update({
-            "status": "COMPLETED",
-            "deleted_at": datetime.utcnow().isoformat(),
-            "completed_at": datetime.utcnow().isoformat()
-        })\
-        .eq("id", record_id)\
+    result = (
+        supabase.table("inputs")
+        .update(
+            {
+                "status": "COMPLETED",
+                "deleted_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat(),
+            }
+        )
+        .eq("id", record_id)
         .execute()
-
+    )
     if result.data:
         return {"status": "success", "message": "Record completed", "data": result.data[0]}
     return {"status": "error", "message": "Record not found"}
 
+
+class UploadRequest(BaseModel):
+    final_data: Optional[Dict[str, Any]] = None
+
+
+@app.post("/records/{record_id}/upload")
+async def upload_record(
+    record_id: int,
+    request: UploadRequest,
+    google_token: str = Header(None, alias="X-Google-Token"),
+):
+    """
+    통합 업로드 엔드포인트
+    - final_data가 있으면 final_result 필드에 저장 (원본 result는 유지)
+    - type에 따라 Calendar/Notion 업로드
+    - 성공 시 completed_at 업데이트, 실패 시 ANALYZED 상태 유지
+    """
+    # 1. 레코드 조회
+    fetch = supabase.table("inputs").select("*").eq("id", record_id).limit(1).execute()
+    record = fetch.data[0] if fetch.data else None
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    if record.get("status") != "ANALYZED":
+        raise HTTPException(status_code=400, detail="Only ANALYZED records can be uploaded")
+
+    # 2. final_data가 있으면 final_result에 저장
+    upload_data = request.final_data if request.final_data else record.get("result", {})
+    if request.final_data:
+        supabase.table("inputs").update({"final_result": request.final_data}).eq("id", record_id).execute()
+
+    record_type = upload_data.get("type") or record.get("type")
+
+    # 3. 업로드 수행
+    try:
+        if record_type == "CALENDAR":
+            if not google_token:
+                raise HTTPException(status_code=400, detail="Google token required for calendar upload")
+
+            # AIAnalysisData → CalendarData 매핑
+            summary = upload_data.get("summary") or record.get("text", "")[:50]
+            description = upload_data.get("content") or upload_data.get("body") or ""
+
+            # 시간 fallback
+            fallback_start = datetime.utcnow().replace(hour=14, minute=0, second=0, microsecond=0)
+            fallback_end = fallback_start.replace(hour=15)
+            start_time = upload_data.get("start_time") or fallback_start.isoformat()
+            end_time = upload_data.get("end_time") or fallback_end.isoformat()
+
+            creds = Credentials(token=google_token)
+            service = build("calendar", "v3", credentials=creds)
+
+            calendar_id = "primary"
+            calendar_name = upload_data.get("category")
+            if calendar_name:
+                calendar_list = service.calendarList().list().execute()
+                for cal in calendar_list.get("items", []):
+                    if cal.get("summary") == calendar_name:
+                        calendar_id = cal.get("id")
+                        break
+
+            event_body = {
+                "summary": summary,
+                "description": description,
+                "start": {"dateTime": start_time, "timeZone": upload_data.get("timezone", "Asia/Seoul")},
+                "end": {"dateTime": end_time, "timeZone": upload_data.get("timezone", "Asia/Seoul")},
+            }
+
+            if upload_data.get("location"):
+                event_body["location"] = upload_data["location"]
+
+            # recurrence → RRULE 변환
+            recurrence = _convert_recurrence_to_rrule(upload_data.get("recurrence"))
+            if recurrence:
+                event_body["recurrence"] = recurrence
+
+            event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
+            upload_result = {"type": "calendar", "link": event.get("htmlLink"), "event_id": event.get("id")}
+
+        else:  # MEMO → Notion
+            if not notion or not NOTION_DB_ID:
+                raise HTTPException(status_code=500, detail="Notion integration not configured")
+
+            # AIAnalysisData → MemoData 매핑
+            title = upload_data.get("summary") or record.get("text", "")[:100]
+            content = upload_data.get("body") or upload_data.get("content") or record.get("text", "")
+            category = upload_data.get("category") or "아이디어"
+
+            page = notion.pages.create(
+                parent={"database_id": NOTION_DB_ID},
+                properties={
+                    "Name": {"title": [{"type": "text", "text": {"content": title}}]},
+                    "Category": {"select": {"name": category}},
+                },
+                children=[
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {"rich_text": [{"type": "text", "text": {"content": content}}]},
+                    }
+                ],
+            )
+            upload_result = {"type": "notion", "page_id": page.get("id"), "url": page.get("url")}
+
+        # 4. 성공 시 완료 처리
+        supabase.table("inputs").update({
+            "status": "COMPLETED",
+            "completed_at": datetime.utcnow().isoformat(),
+            "deleted_at": datetime.utcnow().isoformat(),
+        }).eq("id", record_id).execute()
+
+        return {"status": "success", "data": upload_result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 실패 시 status는 ANALYZED 유지 (final_result는 이미 저장됨)
+        print(f"[Upload] Failed for record {record_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/notion/create")
+async def create_notion_memo(request: NotionMemoRequest):
+    if not notion or not NOTION_DB_ID:
+        return {"status": "error", "message": "Notion integration not configured"}
+
+    try:
+        title = request.content.strip().splitlines()[0][:100] if request.content.strip() else "OneGate Memo"
+        page = notion.pages.create(
+            parent={"database_id": NOTION_DB_ID},
+            properties={
+                "Name": {"title": [{"type": "text", "text": {"content": title}}]},
+                "Category": {"select": {"name": request.category}},
+            },
+            children=[
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": request.content}}]},
+                }
+            ],
+        )
+        return {"status": "success", "data": {"page_id": page.get("id")}}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 @app.get("/categories")
-async def get_categories(user_id: str, type: Optional[str] = None): # user_id 인자 추가
-    """
-    내 카테고리만 조회
-    """
-    query = supabase.table("category").select("*").eq("user_id", user_id) # 필터링 추가
+async def get_categories(user_id: str, type: Optional[str] = None):
+    """내 카테고리만 조회"""
+    query = supabase.table("category").select("*").eq("user_id", user_id)
     if type:
         query = query.eq("type", type)
     result = query.execute()
     return {"status": "success", "data": result.data}
 
+
 @app.post("/categories")
-async def create_category(request: CategoryRequest):
-    """
-    카테고리 생성
-    """
-    data = {
+async def create_category(request: CategoryRequest, user_id: str = Query(None)):
+    """카테고리 생성 (user_id는 body 또는 query에서)"""
+    final_user_id = request.user_id or user_id
+    if not final_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    result = supabase.table("category").insert({
         "name": request.name,
-        "type": request.type
-    }
-    # user_id가 있으면 추가
-    if request.user_id:
-        data["user_id"] = request.user_id
-
-    result = supabase.table("category").insert(data).execute()
-
+        "type": request.type,
+        "user_id": final_user_id
+    }).execute()
     return {"status": "success", "data": result.data[0] if result.data else None}
+
 
 @app.delete("/categories/{category_id}")
 async def delete_category(category_id: int):
-    """
-    카테고리 삭제
-    """
     result = supabase.table("category").delete().eq("id", category_id).execute()
-
     if result.data:
         return {"status": "success", "message": "Category deleted"}
     return {"status": "error", "message": "Category not found"}
 
-# ----------------------------------
-# Google Calendar APIs
-# ----------------------------------
 
 @app.post("/sync/calendars")
 async def sync_google_calendars(
-    user_id: str, 
-    google_token: str = Header(None, alias="X-Google-Token")
+    user_id: str,
+    google_token: str = Header(None, alias="X-Google-Token"),
 ):
     if not google_token:
         return {"status": "error", "message": "Google token required"}
 
     try:
         creds = Credentials(token=google_token)
-        service = build('calendar', 'v3', credentials=creds)
+        service = build("calendar", "v3", credentials=creds)
         calendar_list = service.calendarList().list().execute()
-        calendars = calendar_list.get('items', [])
+        calendars = calendar_list.get("items", [])
 
         valid_calendar_names = []
+        skipped = []
         for cal in calendars:
-            cal_name = cal.get('summary', 'Untitled')
-            # 필터링 조건 유지...
-            if cal.get('accessRole') == 'owner' and not cal.get('primary'):
-                valid_calendar_names.append(cal_name)
+            cal_name = cal.get("summary", "Untitled")
+            cal_id = cal.get("id")
+            access_role = cal.get("accessRole", "")
+            is_primary = cal.get("primary", False)
 
-        # 1. 내 카테고리만 조회
-        existing_categories = supabase.table("category")\
-            .select("*")\
-            .eq("user_id", user_id)\
-            .eq("type", "CALENDAR")\
+            if access_role != "owner":
+                skipped.append({"name": cal_name, "reason": "not owner"})
+                continue
+            if is_primary:
+                skipped.append({"name": cal_name, "reason": "primary calendar"})
+                continue
+            if "holiday" in cal_id.lower() or "#contacts" in cal_id:
+                skipped.append({"name": cal_name, "reason": "system calendar"})
+                continue
+
+            valid_calendar_names.append(cal_name)
+
+        # 내 카테고리만 조회 (user_id 필터링)
+        existing_categories = (
+            supabase.table("category")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("type", "CALENDAR")
             .execute()
-
+        )
         existing_names = {cat["name"] for cat in existing_categories.data} if existing_categories.data else set()
         valid_names_set = set(valid_calendar_names)
 
-        # 2. 삭제 시 user_id 조건 반드시 추가 (보안 핵심)
+        # 삭제 시 user_id 조건 포함 (보안)
+        deleted = []
         to_delete = existing_names - valid_names_set
         for name in to_delete:
-            supabase.table("category")\
-                .delete()\
-                .eq("name", name)\
-                .eq("user_id", user_id)\
-                .eq("type", "CALENDAR")\
-                .execute()
+            supabase.table("category").delete().eq("name", name).eq("user_id", user_id).eq("type", "CALENDAR").execute()
+            deleted.append(name)
 
-        # 3. 추가 시 user_id 포함 (잘 하셨습니다!)
+        # 추가 시 user_id 포함
         to_add = valid_names_set - existing_names
         added = []
         for name in to_add:
-            supabase.table("category").insert({
-                "name": name,
-                "type": "CALENDAR",
-                "user_id": user_id 
-            }).execute()
+            supabase.table("category").insert({"name": name, "type": "CALENDAR", "user_id": user_id}).execute()
             added.append(name)
 
-        return {"status": "success", "added": list(added), "total": len(valid_calendar_names)}
+        kept = valid_names_set & existing_names
 
+        return {
+            "status": "success",
+            "added": list(added),
+            "deleted": list(deleted),
+            "kept": list(kept),
+            "skipped": skipped,
+            "total_synced": len(valid_calendar_names),
+        }
     except Exception as e:
-        print(f"[Sync] Error: {e}")
         return {"status": "error", "message": str(e)}
 
 
 @app.post("/calendar/create")
 async def create_calendar_event(
-    event_data: CalendarEvent,
-    google_token: str = Header(None, alias="X-Google-Token")
+    event_data: CalendarEvent, google_token: str = Header(None, alias="X-Google-Token")
 ):
-    """
-    Google Calendar에 일정 생성
-    - calendar_name: 특정 캘린더에 추가
-    - category: colorId로 매핑해서 primary에 추가
-    """
     if not google_token:
         return {"status": "error", "message": "Google token required"}
 
     try:
         creds = Credentials(token=google_token)
-        service = build('calendar', 'v3', credentials=creds)
+        service = build("calendar", "v3", credentials=creds)
 
-        # 캘린더 ID 결정
-        calendar_id = 'primary'
-
+        calendar_id = "primary"
         if event_data.calendar_name:
-            # 특정 캘린더 이름으로 ID 찾기
             calendar_list = service.calendarList().list().execute()
-            for cal in calendar_list.get('items', []):
-                if cal.get('summary') == event_data.calendar_name:
-                    calendar_id = cal.get('id')
+            for cal in calendar_list.get("items", []):
+                if cal.get("summary") == event_data.calendar_name:
+                    calendar_id = cal.get("id")
                     break
 
-        # 이벤트 바디 생성
         event_body = {
-            'summary': event_data.summary,
-            'description': event_data.description or '',
-            'start': {
-                'dateTime': event_data.start_time,
-                'timeZone': 'Asia/Seoul',
-            },
-            'end': {
-                'dateTime': event_data.end_time,
-                'timeZone': 'Asia/Seoul',
-            },
+            "summary": event_data.summary,
+            "description": event_data.description or "",
+            "start": {"dateTime": event_data.start_time, "timeZone": "Asia/Seoul"},
+            "end": {"dateTime": event_data.end_time, "timeZone": "Asia/Seoul"},
         }
 
-        # 카테고리 -> colorId 매핑
         if event_data.category:
-            color_id = CATEGORY_COLOR_MAP.get(
-                event_data.category.lower(),
-                CATEGORY_COLOR_MAP["default"]
-            )
-            event_body['colorId'] = color_id
+            color_id = CATEGORY_COLOR_MAP.get(event_data.category.lower(), CATEGORY_COLOR_MAP["default"])
+            event_body["colorId"] = color_id
 
-        # 이벤트 생성
-        event = service.events().insert(
-            calendarId=calendar_id,
-            body=event_body
-        ).execute()
-
-        print(f"[Calendar] Event created: {event.get('htmlLink')}")
-        return {
-            "status": "success",
-            "link": event.get('htmlLink'),
-            "calendar_id": calendar_id,
-            "event_id": event.get('id')
-        }
-
+        event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
+        return {"status": "success", "link": event.get("htmlLink"), "calendar_id": calendar_id, "event_id": event.get("id")}
     except Exception as e:
-        print(f"[Calendar] Error: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -379,50 +840,9 @@ async def create_calendar_event(
 @app.post("/calendar/test-create")
 async def create_google_event_legacy(
     event_data: CalendarEvent,
-    google_token: str = Header(None, alias="X-Google-Token")
+    google_token: str = Header(None, alias="X-Google-Token"),
 ):
     return await create_calendar_event(event_data, google_token)
-
-
-# ----------------------------------
-# Notion API
-# ----------------------------------
-
-@app.post("/notion/create")
-async def create_notion_memo(request: NotionMemoRequest):
-    """
-    노션 DB에 메모 생성
-    - 내용: 제목 컬럼
-    - 카테고리: 선택 컬럼 (기본값: 아이디어)
-    """
-    if not notion or not NOTION_DB_ID:
-        return {"status": "error", "message": "Notion not configured"}
-
-    try:
-        result = notion.pages.create(
-            parent={"database_id": NOTION_DB_ID},
-            properties={
-                "내용": {
-                    "title": [{"text": {"content": request.content}}]
-                },
-                "카테고리": {
-                    "select": {"name": request.category}
-                }
-            }
-        )
-
-        notion_url = result.get("url")
-        print(f"[Notion] 생성 완료: {notion_url}")
-
-        return {
-            "status": "success",
-            "url": notion_url,
-            "page_id": result.get("id")
-        }
-
-    except Exception as e:
-        print(f"[Notion] Error: {e}")
-        return {"status": "error", "message": str(e)}
 
 
 # ----------------------------------
@@ -432,12 +852,10 @@ async def create_notion_memo(request: NotionMemoRequest):
 NOTION_AUTH_URL = "https://api.notion.com/v1/oauth/authorize"
 NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
 
+
 @app.get("/auth/notion")
 async def notion_auth(user_id: str):
-    """
-    Notion OAuth 인증 시작
-    - user_id를 state에 포함시켜 콜백에서 사용자 식별
-    """
+    """Notion OAuth 인증 시작 - user_id를 state에 포함"""
     if not NOTION_CLIENT_ID or not NOTION_REDIRECT_URI:
         raise HTTPException(status_code=500, detail="Notion OAuth not configured")
 
@@ -449,43 +867,33 @@ async def notion_auth(user_id: str):
         f"&redirect_uri={NOTION_REDIRECT_URI}"
         f"&state={user_id}"
     )
-
     return {"auth_url": auth_url}
 
 
 @app.get("/auth/notion/callback")
-async def notion_callback(
-    code: str = Query(...),
-    state: str = Query(...)  # user_id
-):
-    """
-    Notion OAuth 콜백 처리
-    - code를 access_token으로 교환
-    - users 테이블에 토큰 저장
-    """
+async def notion_callback(code: str = Query(...), state: str = Query(...)):
+    """Notion OAuth 콜백 처리 - code를 access_token으로 교환"""
     if not NOTION_CLIENT_ID or not NOTION_CLIENT_SECRET:
         raise HTTPException(status_code=500, detail="Notion OAuth not configured")
 
     user_id = state
 
     try:
-        # Basic Auth 헤더 생성
         credentials = f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
-        # Access Token 요청
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 NOTION_TOKEN_URL,
                 headers={
                     "Authorization": f"Basic {encoded_credentials}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json={
                     "grant_type": "authorization_code",
                     "code": code,
-                    "redirect_uri": NOTION_REDIRECT_URI
-                }
+                    "redirect_uri": NOTION_REDIRECT_URI,
+                },
             )
 
         if response.status_code != 200:
@@ -495,26 +903,14 @@ async def notion_callback(
         token_data = response.json()
         access_token = token_data.get("access_token")
         workspace_name = token_data.get("workspace_name")
-        workspace_id = token_data.get("workspace_id")
-        bot_id = token_data.get("bot_id")
 
         print(f"[Notion OAuth] Success - Workspace: {workspace_name}")
 
-        # users 테이블에 토큰 저장
-        result = supabase.table("users")\
-            .update({"notion_access_token": access_token})\
-            .eq("id", user_id)\
-            .execute()
-
+        result = supabase.table("users").update({"notion_access_token": access_token}).eq("id", user_id).execute()
         if not result.data:
-            # 사용자가 없으면 에러 (또는 upsert 처리)
             print(f"[Notion OAuth] User not found: {user_id}")
 
-        # 프론트엔드로 리다이렉트 (성공)
-        # Electron 앱의 경우 딥링크 또는 window.close() 페이지로 리다이렉트
-        return RedirectResponse(
-            url=f"http://localhost:5173?notion_connected=true&workspace={workspace_name}"
-        )
+        return RedirectResponse(url=f"http://localhost:5173?notion_connected=true&workspace={workspace_name}")
 
     except httpx.HTTPError as e:
         print(f"[Notion OAuth] HTTP Error: {e}")
@@ -526,9 +922,7 @@ async def notion_callback(
 
 @app.get("/auth/notion/status")
 async def notion_auth_status(user_id: str):
-    """
-    사용자의 Notion 연결 상태 확인
-    """
+    """사용자의 Notion 연결 상태 확인"""
     try:
         result = supabase.table("users")\
             .select("notion_access_token, notion_database_id")\
@@ -547,7 +941,7 @@ async def notion_auth_status(user_id: str):
                 return {
                     "status": "connected",
                     "user": user_info.get("name"),
-                    "bot_id": user_info.get("bot", {}).get("owner", {}).get("user", {}).get("id")
+                    "bot_id": user_info.get("bot", {}).get("owner", {}).get("user", {}).get("id"),
                 }
             except Exception as e:
                 print(f"[Notion Status] 토큰 검증 실패: {e}")
@@ -562,9 +956,7 @@ async def notion_auth_status(user_id: str):
 
 @app.delete("/auth/notion/disconnect")
 async def notion_disconnect(user_id: str):
-    """
-    Notion 연결 해제 (토큰 및 데이터베이스 ID 모두 삭제)
-    """
+    """Notion 연결 해제 (토큰 및 데이터베이스 ID 모두 삭제)"""
     try:
         result = supabase.table("users")\
             .update({
@@ -577,27 +969,16 @@ async def notion_disconnect(user_id: str):
         if result.data:
             return {"status": "success", "message": "Notion disconnected"}
         return {"status": "error", "message": "User not found"}
-
     except Exception as e:
         print(f"[Notion Disconnect] Error: {e}")
         return {"status": "error", "message": str(e)}
 
 
 @app.post("/notion/create-with-token")
-async def create_notion_memo_with_token(
-    request: NotionMemoRequest,
-    user_id: str = Query(...)
-):
-    """
-    사용자의 OAuth 토큰을 사용해서 노션에 메모 생성
-    """
+async def create_notion_memo_with_token(request: NotionMemoRequest, user_id: str = Query(...)):
+    """사용자의 OAuth 토큰을 사용해서 노션에 메모 생성"""
     try:
-        # 사용자 토큰 조회
-        user_result = supabase.table("users")\
-            .select("notion_access_token")\
-            .eq("id", user_id)\
-            .single()\
-            .execute()
+        user_result = supabase.table("users").select("notion_access_token").eq("id", user_id).single().execute()
 
         if not user_result.data or not user_result.data.get("notion_access_token"):
             return {"status": "error", "message": "Notion not connected"}
@@ -605,24 +986,16 @@ async def create_notion_memo_with_token(
         token = user_result.data["notion_access_token"]
         user_notion = NotionClient(auth=token)
 
-        # 사용자가 접근 가능한 데이터베이스 목록 조회
-        search_result = user_notion.search(
-            filter={"property": "object", "value": "database"}
-        )
-
+        search_result = user_notion.search(filter={"property": "object", "value": "database"})
         databases = search_result.get("results", [])
         if not databases:
             return {"status": "error", "message": "No accessible databases found"}
 
-        # 첫 번째 데이터베이스에 페이지 생성 (또는 특정 DB 지정)
         target_db = databases[0]
         db_id = target_db["id"]
-
-        # 데이터베이스 스키마 확인
         db_info = user_notion.databases.retrieve(db_id)
         properties = db_info.get("properties", {})
 
-        # 제목 속성 찾기
         title_prop = None
         for prop_name, prop_info in properties.items():
             if prop_info.get("type") == "title":
@@ -632,14 +1005,9 @@ async def create_notion_memo_with_token(
         if not title_prop:
             return {"status": "error", "message": "No title property found in database"}
 
-        # 페이지 생성
         result = user_notion.pages.create(
             parent={"database_id": db_id},
-            properties={
-                title_prop: {
-                    "title": [{"text": {"content": request.content}}]
-                }
-            }
+            properties={title_prop: {"title": [{"text": {"content": request.content}}]}},
         )
 
         notion_url = result.get("url")
@@ -649,7 +1017,7 @@ async def create_notion_memo_with_token(
             "status": "success",
             "url": notion_url,
             "page_id": result.get("id"),
-            "database": target_db.get("title", [{}])[0].get("text", {}).get("content", "Unknown")
+            "database": target_db.get("title", [{}])[0].get("text", {}).get("content", "Unknown"),
         }
 
     except Exception as e:
@@ -657,29 +1025,29 @@ async def create_notion_memo_with_token(
         return {"status": "error", "message": str(e)}
 
 
-# backend/main.py
+# ----------------------------------
+# Token Update APIs
+# ----------------------------------
+
 
 class TokenUpdateRequest(BaseModel):
     user_id: str
-    token: Optional[str] = None  # None이면 DB에 null로 저장됨
+    token: Optional[str] = None
+
 
 @app.post("/auth/update-google-token")
 async def update_google_token(request: TokenUpdateRequest):
     try:
-        # provider_token을 google_refresh_token 컬럼에 저장
-        supabase.table("users").update({
-            "google_refresh_token": request.token
-        }).eq("id", request.user_id).execute()
+        supabase.table("users").update({"google_refresh_token": request.token}).eq("id", request.user_id).execute()
         return {"status": "success", "message": "Google token updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/auth/update-notion-token")
 async def update_notion_token(request: TokenUpdateRequest):
     try:
-        supabase.table("users").update({
-            "notion_access_token": request.token
-        }).eq("id", request.user_id).execute()
+        supabase.table("users").update({"notion_access_token": request.token}).eq("id", request.user_id).execute()
         return {"status": "success", "message": "Notion token updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
