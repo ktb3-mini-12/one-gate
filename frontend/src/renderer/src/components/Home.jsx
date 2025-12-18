@@ -429,6 +429,23 @@ export function Home({ user, session, onNavigateToSettings }) {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* SSE Connection Status */}
+            <div className="flex items-center gap-1.5" title={
+              sseStatus === 'connected' ? '실시간 연결됨' :
+              sseStatus === 'connecting' ? '연결 중...' : '연결 끊김'
+            }>
+              <div
+                className={`w-2 h-2 rounded-full ${sseStatus === 'connecting' ? 'animate-pulse' : ''}`}
+                style={{
+                  background: sseStatus === 'connected' ? '#10B981' :
+                             sseStatus === 'connecting' ? '#F59E0B' : '#EF4444',
+                  boxShadow: sseStatus === 'connected' ? '0 0 6px rgba(16, 185, 129, 0.5)' :
+                            sseStatus === 'connecting' ? '0 0 6px rgba(245, 158, 11, 0.5)' :
+                            '0 0 6px rgba(239, 68, 68, 0.5)'
+                }}
+              />
+            </div>
+
             {/* Upload progress indicator */}
             {isUploading && (
               <div className="flex items-center gap-2 mr-2">
