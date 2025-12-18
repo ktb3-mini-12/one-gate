@@ -1,25 +1,30 @@
 @import './base.css';
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
+html, body {
+  height: 100%;
   overflow: hidden;
-  user-select: none;
-  background: transparent;
 }
 
 #root {
   width: 100%;
-  height: 100vh;
+  height: 100%;
+  overflow: auto;
 }
 
-/* 스크롤바 스타일 */
+/* Mini window specific styles */
+.mini-mode {
+  background: transparent !important;
+}
+
+.mini-mode #root {
+  height: auto;
+  overflow: visible;
+}
+
+/* Scrollbar styles */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -27,10 +32,21 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 3px;
+  background: var(--text-secondary);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #aaa;
+  background: var(--text-primary);
+}
+
+/* Animation utilities */
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
