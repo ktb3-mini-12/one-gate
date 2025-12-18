@@ -1,3 +1,18 @@
+"""
+ai/app.py
+
+Gemini 기반 입력 분석 서비스 (텍스트 / 이미지 / PDF)
+- 'CALENDAR' 또는 'MEMO' JSON을 반환
+- main.py에서 라우터로 통합: from ai.app import router
+
+환경변수 (둘 중 하나 필수):
+- GOOGLE_APPLICATION_CREDENTIALS: 서비스 계정 JSON 파일 경로
+- GOOGLE_API_KEY: API 키 (서비스 계정이 없을 경우 사용)
+- GEMINI_MODEL (선택, 기본: gemini-2.0-flash)
+"""
+
+from __future__ import annotations
+
 import io
 import json
 import logging
@@ -40,14 +55,43 @@ KST = ZoneInfo("Asia/Seoul")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 API_KEY = os.getenv("GOOGLE_API_KEY")
+CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
 client = None
 
-if GENAI_AVAILABLE and API_KEY:
-    client = genai.Client(api_key=API_KEY)
+
+def _load_project_id_from_credentials(path: str) -> str | None:
+    """서비스 계정 JSON 파일에서 project_id를 읽어옵니다."""
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+            return data.get("project_id")
+    except Exception as e:
+        logger.error(f"서비스 계정 JSON 파일 읽기 실패: {e}")
+        return None
+
+
+if GENAI_AVAILABLE:
+    if CREDENTIALS_PATH and os.path.exists(CREDENTIALS_PATH):
+        # 서비스 계정 JSON 파일 사용 (Vertex AI 방식)
+        project_id = _load_project_id_from_credentials(CREDENTIALS_PATH)
+        if project_id:
+            client = genai.Client(
+                vertexai=True,
+                project=project_id,
+                location=VERTEX_LOCATION,
+            )
+            logger.info(f"Vertex AI 인증 사용 - project: {project_id}, location: {VERTEX_LOCATION}")
+        else:
+            logger.warning("서비스 계정 JSON에서 project_id를 찾을 수 없습니다.")
+    elif API_KEY:
+        # API 키 방식 사용
+        client = genai.Client(api_key=API_KEY)
+        logger.info("API 키 인증 사용")
+    else:
+        logger.warning("인증 정보가 없습니다. GOOGLE_APPLICATION_CREDENTIALS 또는 GOOGLE_API_KEY를 설정하세요.")
 elif not GENAI_AVAILABLE:
     logger.warning("google-genai 패키지가 설치되지 않았습니다. pip install google-genai")
-elif not API_KEY:
-    logger.warning("GOOGLE_API_KEY가 설정되지 않았습니다.")
 
 
 # ============ Pydantic Models ============
@@ -220,7 +264,7 @@ def _require_client():
     if client is None:
         raise HTTPException(
             status_code=500,
-            detail="Gemini API 키가 없습니다. GOOGLE_API_KEY를 .env에 설정하세요.",
+            detail="인증 정보가 없습니다. GOOGLE_APPLICATION_CREDENTIALS 또는 GOOGLE_API_KEY를 .env에 설정하세요.",
         )
     return client
 
@@ -244,6 +288,18 @@ def _preprocess_image(
 ) -> Tuple[bytes, str]:
     """
     Pillow를 사용한 이미지 전처리.
+
+    - 큰 이미지를 max_size로 리사이즈 (비율 유지)
+    - RGBA → RGB 변환 (JPEG 호환)
+    - JPEG로 압축하여 용량 최적화
+
+    Args:
+        image_bytes: 원본 이미지 바이트
+        max_size: 최대 가로/세로 픽셀 (기본: 1024)
+        quality: JPEG 압축 품질 (기본: 85)
+
+    Returns:
+        (processed_bytes, mime_type) 튜플
     """
     if not PILLOW_AVAILABLE:
         logger.warning("Pillow가 설치되지 않아 이미지 전처리를 건너뜁니다.")
@@ -254,8 +310,9 @@ def _preprocess_image(
         original_size = img.size
         original_format = img.format or "UNKNOWN"
 
-        # RGBA/P 모드 → RGB 변환
+        # RGBA/P 모드 → RGB 변환 (JPEG는 알파 채널 미지원)
         if img.mode in ("RGBA", "P"):
+            # 알파 채널이 있으면 흰색 배경으로 합성
             background = Image.new("RGB", img.size, (255, 255, 255))
             if img.mode == "P":
                 img = img.convert("RGBA")
@@ -264,18 +321,26 @@ def _preprocess_image(
         elif img.mode != "RGB":
             img = img.convert("RGB")
 
-        # 리사이즈
+        # 리사이즈 (비율 유지, 큰 이미지만)
         if max(img.size) > max_size:
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             logger.info(f"이미지 리사이즈: {original_size} → {img.size}")
 
-        # JPEG 압축
+        # JPEG로 압축
         output = io.BytesIO()
         img.save(output, format="JPEG", quality=quality, optimize=True)
         processed_bytes = output.getvalue()
 
-        logger.info(f"이미지 전처리 완료: {original_format} → JPEG, {len(image_bytes)/1024:.1f}KB → {len(processed_bytes)/1024:.1f}KB")
+        # 로그
+        original_kb = len(image_bytes) / 1024
+        processed_kb = len(processed_bytes) / 1024
+        logger.info(
+            f"이미지 전처리 완료: {original_format} → JPEG, "
+            f"{original_kb:.1f}KB → {processed_kb:.1f}KB ({100 * processed_kb / original_kb:.0f}%)"
+        )
+
         return processed_bytes, "image/jpeg"
+
     except Exception as e:
         logger.error(f"이미지 전처리 실패: {e}, 원본 사용")
         return image_bytes, "image/jpeg"
@@ -310,12 +375,14 @@ def _gemini_generate(contents: list, raise_http: bool = True) -> dict:
             ),
         )
         raw_text = resp.text or ""
-        logger.info(f"Gemini 원본 응답:\n{raw_text[:2000]}")
+        logger.info(f"Gemini 원본 응답:\n{raw_text[:2000]}")  # 디버깅용 (최대 2000자)
+
         result = _parse_json_response(raw_text)
 
-        # type 보정
+        # type 필드 유효성 검사: 없거나 유효하지 않으면 MEMO로 설정
         valid_types = ("CALENDAR", "MEMO")
         if result.get("type") not in valid_types:
+            logger.warning(f"유효하지 않은 type '{result.get('type')}' → 'MEMO'로 변경")
             result["type"] = "MEMO"
 
         logger.info(f"분석 완료 - 타입: {result.get('type')}")
@@ -329,23 +396,51 @@ def _gemini_generate(contents: list, raise_http: bool = True) -> dict:
 
 # ============ Service Functions (내부 호출용) ============
 async def analyze_text(text: str) -> dict:
+    """
+    내부 호출용 AI 분석 함수.
+    main.py의 BackgroundTasks에서 호출됨.
+
+    Returns:
+        dict: AIAnalysisData 형식의 분석 결과
+    Raises:
+        Exception: Gemini 호출 실패 시
+    """
     if not text or not text.strip():
         raise ValueError("분석할 텍스트가 비어있습니다.")
     return _gemini_generate([f"분석할 내용:\n{text.strip()}"], raise_http=False)
 
 
 async def analyze_image_bytes(image_bytes: bytes, mime_type: str, text: Optional[str] = None) -> dict:
+    """
+    이미지 바이트로 AI 분석 수행.
+    main.py의 BackgroundTasks에서 호출됨.
+
+    Args:
+        image_bytes: 이미지 바이트 데이터
+        mime_type: 이미지 MIME 타입 (image/jpeg, image/png 등)
+        text: 추가 텍스트 (선택)
+
+    Returns:
+        dict: AIAnalysisData 형식의 분석 결과
+    """
     _require_client()
+
+    # Pillow로 이미지 전처리 (리사이즈, 압축, 포맷 통일)
     processed_bytes, processed_mime = _preprocess_image(image_bytes)
+
+    # Gemini에 이미지 전송
     image_part = types.Part.from_bytes(data=processed_bytes, mime_type=processed_mime)
+
     contents = [image_part]
     if text and text.strip():
         contents.append(f"추가 설명:\n{text.strip()}")
     contents.append("이 이미지를 분석해주세요.")
+
     return _gemini_generate(contents, raise_http=False)
 
 
 def is_ai_available() -> bool:
+    """AI 분석 가능 여부 확인"""
     return GENAI_AVAILABLE and client is not None
 
 
@@ -360,7 +455,7 @@ async def analyze(
     file: Optional[UploadFile] = File(None, description="파일 (type=image/pdf일 때 필수)"),
 ):
     """입력을 분석하여 CALENDAR 또는 MEMO로 분류
-    
+
     - type=text: 텍스트만 분석 (content 필수)
     - type=image: 이미지 분석 (file 필수, content 선택 - 있으면 함께 분석)
     - type=pdf: PDF 분석 (file 필수, content 선택 - 있으면 함께 분석)
@@ -381,6 +476,7 @@ async def analyze(
         logger.info(f"파일 수신 - 크기: {len(file_bytes)} bytes")
 
         if type == "image":
+            # Pillow로 이미지 전처리
             processed_bytes, processed_mime = _preprocess_image(file_bytes)
             part = types.Part.from_bytes(data=processed_bytes, mime_type=processed_mime)
             if content and content.strip():
@@ -409,10 +505,17 @@ async def analyze(
 
 @router.get("/health")
 async def health():
+    auth_method = None
+    if CREDENTIALS_PATH and os.path.exists(CREDENTIALS_PATH):
+        auth_method = "service_account"
+    elif API_KEY:
+        auth_method = "api_key"
+
     return {
         "status": "ok",
         "genai_available": GENAI_AVAILABLE,
-        "has_api_key": bool(API_KEY),
+        "auth_method": auth_method,
+        "has_credentials": bool(client),
         "model": MODEL,
     }
 
