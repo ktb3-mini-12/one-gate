@@ -48,6 +48,7 @@ class NotionMemoRequest(BaseModel):
 class CategoryRequest(BaseModel):
     name: str
     type: str  # MEMO / CALENDAR
+    user_id: Optional[str] = None
 
 class CalendarEvent(BaseModel):
     summary: str
@@ -172,10 +173,15 @@ async def create_category(request: CategoryRequest):
     """
     카테고리 생성
     """
-    result = supabase.table("category").insert({
+    data = {
         "name": request.name,
         "type": request.type
-    }).execute()
+    }
+    # user_id가 있으면 추가
+    if request.user_id:
+        data["user_id"] = request.user_id
+
+    result = supabase.table("category").insert(data).execute()
 
     return {"status": "success", "data": result.data[0] if result.data else None}
 
@@ -478,23 +484,26 @@ async def notion_auth_status(user_id: str):
     """
     try:
         result = supabase.table("users")\
-            .select("notion_access_token")\
+            .select("notion_access_token, notion_database_id")\
             .eq("id", user_id)\
             .single()\
             .execute()
 
+        print(f"[Notion Status] User {user_id}: token={'있음' if result.data and result.data.get('notion_access_token') else '없음'}")
+
         if result.data and result.data.get("notion_access_token"):
-            # 토큰 유효성 검증 (선택적)
             token = result.data["notion_access_token"]
             try:
                 notion_client = NotionClient(auth=token)
                 user_info = notion_client.users.me()
+                print(f"[Notion Status] API 호출 성공: {user_info.get('name')}")
                 return {
                     "status": "connected",
                     "user": user_info.get("name"),
                     "bot_id": user_info.get("bot", {}).get("owner", {}).get("user", {}).get("id")
                 }
-            except Exception:
+            except Exception as e:
+                print(f"[Notion Status] 토큰 검증 실패: {e}")
                 return {"status": "expired", "message": "Token expired or invalid"}
 
         return {"status": "not_connected"}
@@ -507,11 +516,14 @@ async def notion_auth_status(user_id: str):
 @app.delete("/auth/notion/disconnect")
 async def notion_disconnect(user_id: str):
     """
-    Notion 연결 해제 (토큰 삭제)
+    Notion 연결 해제 (토큰 및 데이터베이스 ID 모두 삭제)
     """
     try:
         result = supabase.table("users")\
-            .update({"notion_access_token": None})\
+            .update({
+                "notion_access_token": None,
+                "notion_database_id": None
+            })\
             .eq("id", user_id)\
             .execute()
 
@@ -624,6 +636,342 @@ async def update_notion_token(request: TokenUpdateRequest):
         return {"status": "success", "message": "Notion token updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ----------------------------------
+# Notion 페이지/데이터베이스 관리
+# ----------------------------------
+
+@app.get("/notion/pages")
+async def get_notion_pages(user_id: str):
+    """
+    사용자가 접근 가능한 Notion 페이지 목록 조회
+    (데이터베이스를 생성할 부모 페이지 선택용)
+    """
+    try:
+        user_result = supabase.table("users")\
+            .select("notion_access_token")\
+            .eq("id", user_id)\
+            .single()\
+            .execute()
+
+        if not user_result.data or not user_result.data.get("notion_access_token"):
+            return {"status": "error", "message": "Notion not connected"}
+
+        token = user_result.data["notion_access_token"]
+        user_notion = NotionClient(auth=token)
+
+        # 페이지 검색
+        search_result = user_notion.search(
+            filter={"property": "object", "value": "page"}
+        )
+
+        pages = []
+        for page in search_result.get("results", []):
+            # 페이지 제목 추출
+            title = "Untitled"
+            if page.get("properties"):
+                for prop in page["properties"].values():
+                    if prop.get("type") == "title" and prop.get("title"):
+                        title = prop["title"][0]["text"]["content"] if prop["title"] else "Untitled"
+                        break
+
+            # 페이지 아이콘
+            icon = None
+            if page.get("icon"):
+                if page["icon"]["type"] == "emoji":
+                    icon = page["icon"]["emoji"]
+                elif page["icon"]["type"] == "external":
+                    icon = page["icon"]["external"]["url"]
+
+            pages.append({
+                "id": page["id"],
+                "title": title,
+                "icon": icon,
+                "url": page.get("url")
+            })
+
+        return {"status": "success", "data": pages}
+
+    except Exception as e:
+        print(f"[Notion Pages] Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+class CreateDatabaseRequest(BaseModel):
+    user_id: str
+    parent_page_id: str
+    database_name: str = "One Gate 메모"
+
+
+@app.post("/notion/setup-database")
+async def setup_notion_database(request: CreateDatabaseRequest):
+    """
+    선택한 페이지에서 One Gate 데이터베이스 설정
+    - 이미 있으면: 기존 데이터베이스 연결
+    - 없으면: 새로 생성
+    """
+    try:
+        user_result = supabase.table("users")\
+            .select("notion_access_token")\
+            .eq("id", request.user_id)\
+            .single()\
+            .execute()
+
+        if not user_result.data or not user_result.data.get("notion_access_token"):
+            return {"status": "error", "message": "Notion not connected"}
+
+        token = user_result.data["notion_access_token"]
+        user_notion = NotionClient(auth=token)
+
+        # 1. 선택한 페이지의 하위 블록(데이터베이스) 검색
+        existing_db = None
+        try:
+            children = user_notion.blocks.children.list(block_id=request.parent_page_id)
+            for block in children.get("results", []):
+                if block.get("type") == "child_database":
+                    # 데이터베이스 제목 확인
+                    db_id = block["id"]
+                    db_info = user_notion.databases.retrieve(db_id)
+                    db_title = ""
+                    if db_info.get("title"):
+                        db_title = db_info["title"][0]["text"]["content"] if db_info["title"] else ""
+
+                    # "One Gate" 가 포함된 데이터베이스 찾기
+                    if "One Gate" in db_title or "one gate" in db_title.lower():
+                        existing_db = db_info
+                        break
+        except Exception as e:
+            print(f"[Notion] 하위 블록 검색 중 오류 (무시): {e}")
+
+        # 2. 기존 데이터베이스가 있으면 연결
+        if existing_db:
+            db_id = existing_db["id"]
+            db_url = existing_db["url"]
+            db_title = existing_db["title"][0]["text"]["content"] if existing_db.get("title") else "One Gate 메모"
+
+            # 사용자 테이블에 데이터베이스 ID 저장
+            supabase.table("users")\
+                .update({"notion_database_id": db_id})\
+                .eq("id", request.user_id)\
+                .execute()
+
+            print(f"[Notion] Existing database connected: {db_url}")
+
+            return {
+                "status": "success",
+                "database_id": db_id,
+                "url": db_url,
+                "name": db_title,
+                "created": False,
+                "message": "기존 데이터베이스에 연결되었습니다"
+            }
+
+        # 3. 없으면 새로 생성
+        new_db = user_notion.databases.create(
+            parent={"type": "page_id", "page_id": request.parent_page_id},
+            title=[{"type": "text", "text": {"content": request.database_name}}],
+            icon={"type": "emoji", "emoji": "⚡"},
+            properties={
+                "제목": {"title": {}},
+                "카테고리": {
+                    "select": {
+                        "options": [
+                            {"name": "아이디어", "color": "blue"},
+                            {"name": "할 일", "color": "green"},
+                            {"name": "메모", "color": "yellow"},
+                            {"name": "일정", "color": "red"},
+                            {"name": "기타", "color": "gray"}
+                        ]
+                    }
+                },
+                "타입": {
+                    "select": {
+                        "options": [
+                            {"name": "MEMO", "color": "purple"},
+                            {"name": "CALENDAR", "color": "orange"}
+                        ]
+                    }
+                },
+                "상태": {
+                    "select": {
+                        "options": [
+                            {"name": "대기", "color": "gray"},
+                            {"name": "완료", "color": "green"}
+                        ]
+                    }
+                },
+                "생성일": {"date": {}}
+            }
+        )
+
+        db_id = new_db["id"]
+        db_url = new_db["url"]
+
+        # 사용자 테이블에 데이터베이스 ID 저장
+        supabase.table("users")\
+            .update({"notion_database_id": db_id})\
+            .eq("id", request.user_id)\
+            .execute()
+
+        print(f"[Notion] Database created: {db_url}")
+
+        return {
+            "status": "success",
+            "database_id": db_id,
+            "url": db_url,
+            "name": request.database_name,
+            "created": True,
+            "message": "새 데이터베이스가 생성되었습니다"
+        }
+
+    except Exception as e:
+        print(f"[Notion Setup DB] Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/notion/database-status")
+async def get_notion_database_status(user_id: str):
+    """
+    사용자의 Notion 데이터베이스 설정 상태 확인
+    """
+    try:
+        user_result = supabase.table("users")\
+            .select("notion_access_token, notion_database_id")\
+            .eq("id", user_id)\
+            .single()\
+            .execute()
+
+        if not user_result.data:
+            return {"status": "error", "message": "User not found"}
+
+        token = user_result.data.get("notion_access_token")
+        db_id = user_result.data.get("notion_database_id")
+
+        if not token:
+            return {"status": "not_connected"}
+
+        if not db_id:
+            return {"status": "no_database", "message": "데이터베이스를 선택해주세요"}
+
+        # 데이터베이스 정보 조회
+        try:
+            user_notion = NotionClient(auth=token)
+            db_info = user_notion.databases.retrieve(db_id)
+
+            db_title = "One Gate 메모"
+            if db_info.get("title"):
+                db_title = db_info["title"][0]["text"]["content"] if db_info["title"] else db_title
+
+            # 부모 페이지 정보 가져오기
+            page_name = None
+            parent = db_info.get("parent", {})
+            if parent.get("type") == "page_id":
+                try:
+                    parent_page = user_notion.pages.retrieve(parent["page_id"])
+                    # 페이지 제목 추출
+                    if parent_page.get("properties"):
+                        for prop in parent_page["properties"].values():
+                            if prop.get("type") == "title" and prop.get("title"):
+                                page_name = prop["title"][0]["text"]["content"] if prop["title"] else None
+                                break
+                except Exception:
+                    pass
+
+            return {
+                "status": "ready",
+                "database_id": db_id,
+                "database_name": db_title,
+                "page_name": page_name,
+                "url": db_info.get("url")
+            }
+        except Exception:
+            # 데이터베이스가 삭제되었거나 접근 불가
+            return {"status": "database_invalid", "message": "데이터베이스에 접근할 수 없습니다"}
+
+    except Exception as e:
+        print(f"[Notion DB Status] Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+class SaveMemoRequest(BaseModel):
+    user_id: str
+    title: str
+    category: str = "메모"
+    content_type: str = "MEMO"  # MEMO or CALENDAR
+    body: Optional[str] = None
+
+
+@app.post("/notion/save-memo")
+async def save_memo_to_notion(request: SaveMemoRequest):
+    """
+    One Gate 데이터베이스에 메모 저장
+    """
+    try:
+        user_result = supabase.table("users")\
+            .select("notion_access_token, notion_database_id")\
+            .eq("id", request.user_id)\
+            .single()\
+            .execute()
+
+        if not user_result.data:
+            return {"status": "error", "message": "User not found"}
+
+        token = user_result.data.get("notion_access_token")
+        db_id = user_result.data.get("notion_database_id")
+
+        if not token:
+            return {"status": "error", "message": "Notion not connected"}
+
+        if not db_id:
+            return {"status": "error", "message": "데이터베이스가 설정되지 않았습니다"}
+
+        user_notion = NotionClient(auth=token)
+
+        # 페이지 생성 (본문 포함)
+        children = []
+        if request.body:
+            children.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": request.body}}]
+                }
+            })
+
+        new_page = user_notion.pages.create(
+            parent={"database_id": db_id},
+            properties={
+                "제목": {
+                    "title": [{"text": {"content": request.title}}]
+                },
+                "카테고리": {
+                    "select": {"name": request.category}
+                },
+                "타입": {
+                    "select": {"name": request.content_type}
+                },
+                "상태": {
+                    "select": {"name": "대기"}
+                },
+                "생성일": {
+                    "date": {"start": datetime.utcnow().isoformat()}
+                }
+            },
+            children=children if children else None
+        )
+
+        print(f"[Notion] Memo saved: {new_page.get('url')}")
+
+        return {
+            "status": "success",
+            "page_id": new_page["id"],
+            "url": new_page["url"]
+        }
+
+    except Exception as e:
+        print(f"[Notion Save Memo] Error: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # 실행: uvicorn main:app --reload

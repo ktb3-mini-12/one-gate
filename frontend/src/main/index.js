@@ -8,6 +8,7 @@ import icon from '../../resources/icon.png?asset'
 let miniWindow = null // 미니 입력 창
 let mainWindow = null // 메인 앱 창
 let authWindow = null
+let notionAuthWindow = null
 
 // 미니 입력 창 생성 (Spotlight 스타일)
 function createMiniWindow() {
@@ -121,7 +122,84 @@ function createAuthWindow(authUrl) {
   })
 }
 
-// OAuth 콜백 처리
+// Notion OAuth 인증 창 생성
+function createNotionAuthWindow(authUrl) {
+  console.log('[Notion Auth] Opening auth window with URL:', authUrl)
+
+  notionAuthWindow = new BrowserWindow({
+    width: 500,
+    height: 700,
+    show: true,
+    frame: true,
+    center: true,
+    title: 'Notion 연동',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  })
+
+  notionAuthWindow.loadURL(authUrl)
+
+  // 페이지 로드 완료 시 로그
+  notionAuthWindow.webContents.on('did-finish-load', () => {
+    const currentUrl = notionAuthWindow.webContents.getURL()
+    console.log('[Notion Auth] Page loaded:', currentUrl)
+
+    // 백엔드 콜백에서 localhost로 리다이렉트 되었을 때 처리
+    if (currentUrl.includes('localhost') && currentUrl.includes('notion_connected=true')) {
+      console.log('[Notion Auth] OAuth success, closing window')
+
+      // 메인 창에 데이터 새로고침 신호 보내기
+      if (mainWindow) {
+        mainWindow.webContents.send('notion-auth-success')
+        setTimeout(() => {
+          mainWindow.webContents.send('refresh-data')
+        }, 100)
+      }
+
+      notionAuthWindow.close()
+    }
+  })
+
+  // URL 변화 감지
+  notionAuthWindow.webContents.on('will-redirect', (event, url) => {
+    console.log('[Notion Auth] will-redirect:', url)
+    handleNotionCallback(url)
+  })
+
+  notionAuthWindow.webContents.on('will-navigate', (event, url) => {
+    console.log('[Notion Auth] will-navigate:', url)
+    if (url.includes('localhost')) {
+      handleNotionCallback(url)
+    }
+  })
+
+  notionAuthWindow.on('closed', () => {
+    console.log('[Notion Auth] Window closed')
+    notionAuthWindow = null
+  })
+}
+
+// Notion OAuth 콜백 처리
+function handleNotionCallback(url) {
+  if (url.includes('localhost') && url.includes('notion_connected=true')) {
+    console.log('[Notion Auth] OAuth success detected')
+
+    if (mainWindow) {
+      mainWindow.webContents.send('notion-auth-success')
+      setTimeout(() => {
+        mainWindow.webContents.send('refresh-data')
+      }, 100)
+    }
+
+    if (notionAuthWindow) {
+      notionAuthWindow.close()
+    }
+  }
+}
+
+// Google OAuth 콜백 처리
 function handleAuthCallback(url) {
   console.log('[Auth] Handling callback URL:', url)
 
@@ -197,9 +275,14 @@ app.whenReady().then(() => {
   })
 })
 
-// IPC: OAuth 창 열기
+// IPC: Google OAuth 창 열기
 ipcMain.on('open-auth-window', (event, authUrl) => {
   createAuthWindow(authUrl)
+})
+
+// IPC: Notion OAuth 창 열기
+ipcMain.on('open-notion-auth-window', (event, authUrl) => {
+  createNotionAuthWindow(authUrl)
 })
 
 // IPC: 미니 창 닫기

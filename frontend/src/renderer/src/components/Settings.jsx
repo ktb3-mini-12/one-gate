@@ -140,6 +140,18 @@ export function Settings({ user, onBack }) {
   const [isAddingMemoTag, setIsAddingMemoTag] = useState(false)
   const [newMemoTagName, setNewMemoTagName] = useState('')
 
+  // Notion
+  const [notionConnected, setNotionConnected] = useState(false)
+  const [notionUser, setNotionUser] = useState(null)
+  const [notionDbStatus, setNotionDbStatus] = useState(null) // ready, no_database, database_invalid
+  const [notionDbName, setNotionDbName] = useState(null)
+  const [notionPageName, setNotionPageName] = useState(null) // 부모 페이지명
+  const [notionPages, setNotionPages] = useState([])
+  const [selectedPageId, setSelectedPageId] = useState(null)
+  const [isCreatingDb, setIsCreatingDb] = useState(false)
+  const [showPageSelector, setShowPageSelector] = useState(false)
+  const [isLoadingNotion, setIsLoadingNotion] = useState(true) // 로딩 상태
+
   const getGoogleToken = () => localStorage.getItem('google_provider_token')
 
   const showToast = (message, type = 'success') => {
@@ -158,6 +170,108 @@ export function Settings({ user, onBack }) {
       setCalendarTags([])
     }
     await fetchMemoTags()
+    await checkNotionStatus()
+  }
+
+  // Notion 연동 상태 확인
+  const checkNotionStatus = async () => {
+    if (!user?.id) return
+    setIsLoadingNotion(true)
+    try {
+      const res = await api.get('/auth/notion/status', { params: { user_id: user.id } })
+      console.log('[Notion Status]', res.data)
+
+      if (res.data.status === 'connected') {
+        setNotionConnected(true)
+        setNotionUser(res.data.user || null)
+        // 데이터베이스 상태도 확인
+        await checkNotionDatabaseStatus()
+      } else if (res.data.status === 'expired') {
+        // 토큰 만료 - 재연동 필요
+        setNotionConnected(false)
+        setNotionUser(null)
+        setNotionDbStatus(null)
+        setNotionDbName(null)
+        setNotionPageName(null)
+        console.log('[Notion] 토큰 만료됨, 재연동 필요')
+      } else {
+        setNotionConnected(false)
+        setNotionUser(null)
+        setNotionDbStatus(null)
+        setNotionDbName(null)
+        setNotionPageName(null)
+      }
+    } catch (err) {
+      console.error('Notion 상태 확인 실패:', err)
+      setNotionConnected(false)
+    } finally {
+      setIsLoadingNotion(false)
+    }
+  }
+
+  // Notion 데이터베이스 상태 확인
+  const checkNotionDatabaseStatus = async () => {
+    if (!user?.id) return
+    try {
+      const res = await api.get('/notion/database-status', { params: { user_id: user.id } })
+      setNotionDbStatus(res.data.status)
+      if (res.data.status === 'ready') {
+        setNotionDbName(res.data.database_name)
+        setNotionPageName(res.data.page_name)
+      } else {
+        setNotionDbName(null)
+        setNotionPageName(null)
+      }
+    } catch (err) {
+      console.error('Notion DB 상태 확인 실패:', err)
+    }
+  }
+
+  // Notion 페이지 목록 가져오기
+  const fetchNotionPages = async () => {
+    if (!user?.id) return
+    try {
+      const res = await api.get('/notion/pages', { params: { user_id: user.id } })
+      if (res.data.status === 'success') {
+        setNotionPages(res.data.data || [])
+      }
+    } catch (err) {
+      console.error('Notion 페이지 로드 실패:', err)
+    }
+  }
+
+  // Notion 데이터베이스 설정 (기존 연결 또는 새로 생성)
+  const handleSetupNotionDatabase = async () => {
+    if (!selectedPageId) {
+      showToast('페이지를 선택해주세요', 'error')
+      return
+    }
+
+    setIsCreatingDb(true)
+    try {
+      const res = await api.post('/notion/setup-database', {
+        user_id: user.id,
+        parent_page_id: selectedPageId,
+        database_name: 'One Gate 메모'
+      })
+
+      if (res.data.status === 'success') {
+        // 기존 연결인지 새로 생성인지에 따라 메시지 다르게
+        const message = res.data.created
+          ? '새 데이터베이스가 생성되었습니다!'
+          : '기존 데이터베이스에 연결되었습니다!'
+        showToast(message)
+        setShowPageSelector(false)
+        setSelectedPageId(null)
+        await checkNotionDatabaseStatus()
+      } else {
+        showToast(res.data.message || '설정 실패', 'error')
+      }
+    } catch (err) {
+      showToast('데이터베이스 설정 중 오류가 발생했습니다', 'error')
+    } finally {
+      setIsCreatingDb(false)
+    }
   }
 
   // [수정 포인트 2] 초기 로드 및 일렉트론 신호 리스너 등록
@@ -200,8 +314,14 @@ export function Settings({ user, onBack }) {
   }
 
   const fetchMemoTags = async () => {
+    if (!user?.id) return
     try {
-      const res = await api.get('/categories', { params: { type: 'MEMO' } })
+      const res = await api.get('/categories', {
+        params: {
+          type: 'MEMO',
+          user_id: user.id
+        }
+      })
       if (res.data.status === 'success') {
         setMemoTags(res.data.data || [])
       }
@@ -249,7 +369,7 @@ export function Settings({ user, onBack }) {
   }
 
   const handleAddMemoTag = async () => {
-    if (!newMemoTagName.trim()) return
+    if (!newMemoTagName.trim() || !user?.id) return
 
     const categoryName = newMemoTagName.trim()
     const tempId = `temp-${Date.now()}`
@@ -259,7 +379,11 @@ export function Settings({ user, onBack }) {
     setIsAddingMemoTag(false)
 
     try {
-      const res = await api.post('/categories', { name: categoryName, type: 'MEMO' })
+      const res = await api.post('/categories', {
+        name: categoryName,
+        type: 'MEMO',
+        user_id: user.id
+      })
       if (res.data.data) {
         setMemoTags((prev) =>
           prev.map((cat) => (cat.id === tempId ? { ...cat, id: res.data.data.id } : cat))
@@ -311,13 +435,61 @@ export function Settings({ user, onBack }) {
 
   const handleConnectGoogle = () => {
     const authUrl = `https://mzjeavvumjqgmbkszahs.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:5173&scopes=https://www.googleapis.com/auth/calendar&access_type=offline&prompt=consent`;
-    
+
     const ipc = window.electron?.ipcRenderer || window.ipcRenderer
     if (ipc) {
       ipc.send('open-auth-window', authUrl);
     } else {
       console.error('IPC Renderer를 찾을 수 없습니다.');
       showToast('일렉트론 환경이 아닙니다.', 'error');
+    }
+  };
+
+  const handleConnectNotion = async () => {
+    if (!user?.id) {
+      showToast('사용자 정보를 불러올 수 없습니다.', 'error')
+      return
+    }
+
+    try {
+      // 백엔드에서 Notion OAuth URL 가져오기
+      const res = await api.get('/auth/notion', { params: { user_id: user.id } })
+      const authUrl = res.data.auth_url
+
+      if (!authUrl) {
+        showToast('Notion OAuth URL을 가져올 수 없습니다.', 'error')
+        return
+      }
+
+      const ipc = window.electron?.ipcRenderer || window.ipcRenderer
+      if (ipc) {
+        ipc.send('open-notion-auth-window', authUrl)
+      } else {
+        // 브라우저 환경에서는 새 창으로 열기
+        window.open(authUrl, '_blank')
+      }
+    } catch (err) {
+      console.error('Notion 연동 시작 실패:', err)
+      showToast('Notion 연동을 시작할 수 없습니다.', 'error')
+    }
+  };
+
+  const handleDisconnectNotion = async () => {
+    if (!window.confirm('노션 연동을 해제하시겠습니까?')) return
+
+    try {
+      await api.delete('/auth/notion/disconnect', { params: { user_id: user.id } })
+      setNotionConnected(false)
+      setNotionUser(null)
+      setNotionDbStatus(null)
+      setNotionDbName(null)
+      setNotionPageName(null)
+      setNotionPages([])
+      setSelectedPageId(null)
+      setShowPageSelector(false)
+      showToast('노션 연동이 해제되었습니다.')
+    } catch (err) {
+      showToast('연동 해제 중 오류가 발생했습니다.', 'error')
     }
   };
 
@@ -482,94 +654,282 @@ export function Settings({ user, onBack }) {
           <ServiceCard
             icon="📝"
             name="Notion"
-            description={`${memoTags.length}개 카테고리`}
-            isConnected={true}
+            description={
+              isLoadingNotion
+                ? '연동 상태 확인 중...'
+                : notionConnected
+                  ? notionDbStatus === 'ready'
+                    ? `${notionPageName || '페이지'}에 연결됨`
+                    : '데이터베이스 설정 필요'
+                  : '연결 안됨'
+            }
+            isConnected={!isLoadingNotion && notionConnected && notionDbStatus === 'ready'}
             isExpanded={expandedSection === 'notion'}
             onToggle={() => toggleSection('notion')}
             accentColor="#000000"
           >
-            <div>
-              <small style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '10px' }}>
-                메모 카테고리
-              </small>
-              <div className="flex flex-wrap gap-2">
-                {memoTags.map((tag) => (
+            <div className="space-y-4">
+              {/* 로딩 중 */}
+              {isLoadingNotion && (
+                <div className="flex items-center justify-center py-4 gap-3">
                   <div
-                    key={tag.id}
-                    className="group relative px-3 py-1.5 rounded-xl transition-all hover:pr-8"
+                    className="w-5 h-5 rounded-full animate-spin"
+                    style={{ border: '2px solid var(--divider)', borderTopColor: '#000' }}
+                  />
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
+                    연동 상태 확인 중...
+                  </span>
+                </div>
+              )}
+
+              {/* 연결 안됨 */}
+              {!isLoadingNotion && !notionConnected && (
+                <button
+                  onClick={handleConnectNotion}
+                  className="w-full py-3 rounded-xl flex items-center justify-center gap-2 transition-all hover:opacity-90"
+                  style={{
+                    background: 'linear-gradient(135deg, #000000, #333333)',
+                    color: '#fff',
+                    fontWeight: '600',
+                    fontSize: '14px'
+                  }}
+                >
+                  노션 연동하기
+                </button>
+              )}
+
+              {/* 연결됨 - 데이터베이스 설정 필요 */}
+              {!isLoadingNotion && notionConnected && notionDbStatus !== 'ready' && (
+                <>
+                  <div
+                    className="p-3 rounded-xl"
                     style={{
-                      background: 'var(--surface-gradient-top)',
-                      border: '1px solid var(--divider)',
-                      color: 'var(--text-primary)',
-                      fontSize: '13px',
-                      fontWeight: '500'
+                      background: 'rgba(251, 191, 36, 0.1)',
+                      border: '1px solid rgba(251, 191, 36, 0.3)'
                     }}
                   >
-                    {tag.name}
+                    <div className="flex items-center gap-2 mb-2">
+                      <span style={{ fontSize: '16px' }}>⚠️</span>
+                      <span style={{ color: 'var(--text-primary)', fontSize: '14px', fontWeight: '500' }}>
+                        데이터베이스 설정이 필요합니다
+                      </span>
+                    </div>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                      메모를 저장할 Notion 페이지를 선택해주세요. 기존 데이터베이스가 있으면 연결하고, 없으면 새로 생성합니다.
+                    </p>
+                  </div>
+
+                  {!showPageSelector ? (
                     <button
-                      onClick={() => handleDeleteMemoTag(tag.id, tag.name)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 rounded-full flex items-center justify-center"
+                      onClick={() => {
+                        setShowPageSelector(true)
+                        fetchNotionPages()
+                      }}
+                      className="w-full py-3 rounded-xl flex items-center justify-center gap-2 transition-all hover:opacity-90"
                       style={{
-                        background: 'rgba(239, 68, 68, 0.2)',
-                        color: '#EF4444',
-                        fontSize: '12px'
+                        background: 'linear-gradient(135deg, #000000, #333333)',
+                        color: '#fff',
+                        fontWeight: '600',
+                        fontSize: '14px'
                       }}
                     >
-                      ×
+                      📄 페이지 선택하기
                     </button>
-                  </div>
-                ))}
+                  ) : (
+                    <div className="space-y-3">
+                      <small style={{ color: 'var(--text-secondary)' }}>
+                        데이터베이스를 생성할 페이지 선택:
+                      </small>
+                      <div
+                        className="max-h-48 overflow-y-auto rounded-xl"
+                        style={{ background: 'var(--surface-gradient-top)', border: '1px solid var(--divider)' }}
+                      >
+                        {notionPages.length === 0 ? (
+                          <div className="p-4 text-center" style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                            페이지를 불러오는 중...
+                          </div>
+                        ) : (
+                          notionPages.map((page) => (
+                            <button
+                              key={page.id}
+                              onClick={() => setSelectedPageId(page.id)}
+                              className="w-full p-3 flex items-center gap-3 transition-all hover:opacity-80"
+                              style={{
+                                background: selectedPageId === page.id ? 'rgba(0, 0, 0, 0.2)' : 'transparent',
+                                borderBottom: '1px solid var(--divider)'
+                              }}
+                            >
+                              <span style={{ fontSize: '18px' }}>{page.icon || '📄'}</span>
+                              <span style={{ color: 'var(--text-primary)', fontSize: '14px' }}>
+                                {page.title}
+                              </span>
+                              {selectedPageId === page.id && (
+                                <span style={{ marginLeft: 'auto', color: '#10B981' }}>✓</span>
+                              )}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            setShowPageSelector(false)
+                            setSelectedPageId(null)
+                          }}
+                          className="flex-1 py-2 rounded-xl transition-all"
+                          style={{
+                            background: 'var(--surface-gradient-top)',
+                            color: 'var(--text-secondary)',
+                            border: '1px solid var(--divider)',
+                            fontSize: '14px'
+                          }}
+                        >
+                          취소
+                        </button>
+                        <button
+                          onClick={handleSetupNotionDatabase}
+                          disabled={!selectedPageId || isCreatingDb}
+                          className="flex-1 py-2 rounded-xl transition-all disabled:opacity-50"
+                          style={{
+                            background: 'linear-gradient(135deg, #000000, #333333)',
+                            color: '#fff',
+                            fontWeight: '600',
+                            fontSize: '14px'
+                          }}
+                        >
+                          {isCreatingDb ? '설정 중...' : '연결하기'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
 
-                {isAddingMemoTag ? (
+              {/* 연결됨 - 데이터베이스 준비 완료 */}
+              {!isLoadingNotion && notionConnected && notionDbStatus === 'ready' && (
+                <>
                   <div
-                    className="px-3 py-1.5 rounded-xl flex items-center gap-1"
+                    className="p-3 rounded-xl"
                     style={{
-                      background: 'var(--surface-gradient-top)',
-                      border: '1px solid var(--action-primary)'
+                      background: 'rgba(16, 185, 129, 0.1)',
+                      border: '1px solid rgba(16, 185, 129, 0.2)'
                     }}
                   >
-                    <input
-                      type="text"
-                      value={newMemoTagName}
-                      onChange={(e) => setNewMemoTagName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                          handleAddMemoTag()
-                        } else if (e.key === 'Escape') {
-                          setIsAddingMemoTag(false)
-                          setNewMemoTagName('')
-                        }
-                      }}
-                      onBlur={() => {
-                        if (!newMemoTagName.trim()) {
-                          setIsAddingMemoTag(false)
-                        }
-                      }}
-                      autoFocus
-                      className="bg-transparent border-none outline-none"
-                      style={{
-                        color: 'var(--text-primary)',
-                        width: '80px',
-                        fontSize: '13px'
-                      }}
-                      placeholder="태그명"
-                    />
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-2 h-2 rounded-full" style={{ background: '#10B981' }} />
+                      <span style={{ color: 'var(--text-primary)', fontSize: '14px', fontWeight: '500' }}>
+                        연결됨
+                      </span>
+                    </div>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span>📄</span>
+                        <span>페이지: <strong style={{ color: 'var(--text-primary)' }}>{notionPageName || '알 수 없음'}</strong></span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span>⚡</span>
+                        <span>데이터베이스: <strong style={{ color: 'var(--text-primary)' }}>{notionDbName || 'One Gate 메모'}</strong></span>
+                      </div>
+                    </div>
                   </div>
-                ) : (
-                  <button
-                    onClick={() => setIsAddingMemoTag(true)}
-                    className="px-3 py-1.5 rounded-xl transition-all hover:opacity-90"
-                    style={{
-                      background: 'linear-gradient(135deg, var(--action-primary), #0056b3)',
-                      color: '#fff',
-                      fontSize: '13px',
-                      fontWeight: '500'
-                    }}
-                  >
-                    + 추가
-                  </button>
-                )}
-              </div>
+
+                  {/* 메모 카테고리 관리 */}
+                  <div>
+                    <small style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '10px' }}>
+                      메모 카테고리
+                    </small>
+                    <div className="flex flex-wrap gap-2">
+                      {memoTags.map((tag) => (
+                        <div
+                          key={tag.id}
+                          className="group relative px-3 py-1.5 rounded-xl transition-all hover:pr-8"
+                          style={{
+                            background: 'var(--surface-gradient-top)',
+                            border: '1px solid var(--divider)',
+                            color: 'var(--text-primary)',
+                            fontSize: '13px',
+                            fontWeight: '500'
+                          }}
+                        >
+                          {tag.name}
+                          <button
+                            onClick={() => handleDeleteMemoTag(tag.id, tag.name)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 rounded-full flex items-center justify-center"
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.2)',
+                              color: '#EF4444',
+                              fontSize: '12px'
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+
+                      {isAddingMemoTag ? (
+                        <div
+                          className="px-3 py-1.5 rounded-xl flex items-center gap-1"
+                          style={{
+                            background: 'var(--surface-gradient-top)',
+                            border: '1px solid var(--action-primary)'
+                          }}
+                        >
+                          <input
+                            type="text"
+                            value={newMemoTagName}
+                            onChange={(e) => setNewMemoTagName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                                handleAddMemoTag()
+                              } else if (e.key === 'Escape') {
+                                setIsAddingMemoTag(false)
+                                setNewMemoTagName('')
+                              }
+                            }}
+                            onBlur={() => {
+                              if (!newMemoTagName.trim()) {
+                                setIsAddingMemoTag(false)
+                              }
+                            }}
+                            autoFocus
+                            className="bg-transparent border-none outline-none"
+                            style={{
+                              color: 'var(--text-primary)',
+                              width: '80px',
+                              fontSize: '13px'
+                            }}
+                            placeholder="태그명"
+                          />
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setIsAddingMemoTag(true)}
+                          className="px-3 py-1.5 rounded-xl transition-all hover:opacity-90"
+                          style={{
+                            background: 'linear-gradient(135deg, var(--action-primary), #0056b3)',
+                            color: '#fff',
+                            fontSize: '13px',
+                            fontWeight: '500'
+                          }}
+                        >
+                          + 추가
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 연동 해제 버튼 */}
+              {!isLoadingNotion && notionConnected && (
+                <button
+                  onClick={handleDisconnectNotion}
+                  className="w-full py-2 text-xs transition-all opacity-60 hover:opacity-100"
+                  style={{ color: '#EF4444', textDecoration: 'underline', background: 'none', border: 'none' }}
+                >
+                  노션 연동 해제하기
+                </button>
+              )}
             </div>
           </ServiceCard>
         </div>

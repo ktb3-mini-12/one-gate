@@ -235,9 +235,13 @@ export function Home({ user, session, onNavigateToSettings }) {
   }
 
   const addToNotion = async (record) => {
-    const res = await api.post('/notion/create', {
-      content: record.text,
-      category: record.category?.name || '아이디어'
+    // 새로운 OAuth 기반 API 사용
+    const res = await api.post('/notion/save-memo', {
+      user_id: user.id,
+      title: record.text,
+      category: record.category?.name || '메모',
+      content_type: record.type || 'MEMO',
+      body: record.result?.body || null
     })
 
     if (res.data?.status !== 'success') {
