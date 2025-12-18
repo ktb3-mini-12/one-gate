@@ -5,8 +5,8 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
-let miniWindow = null
-let mainWindow = null
+let miniWindow = null // 미니 입력 창
+let mainWindow = null // 메인 앱 창
 let authWindow = null
 
 // 미니 입력 창 생성 (Spotlight 스타일)
@@ -34,9 +34,10 @@ function createMiniWindow() {
     miniWindow.hide()
   })
 
-  const miniUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
-    ? `${process.env['ELECTRON_RENDERER_URL']}?mode=mini`
-    : `file://${join(__dirname, '../renderer/index.html')}?mode=mini`
+  const miniUrl =
+    is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? `${process.env['ELECTRON_RENDERER_URL']}?mode=mini`
+      : `file://${join(__dirname, '../renderer/index.html')}?mode=mini`
 
   miniWindow.loadURL(miniUrl)
 }
@@ -47,7 +48,7 @@ function createMainWindow() {
     width: 600,
     height: 500,
     show: false,
-    frame: true,
+    frame: true, // 타이틀바, 닫기 버튼 있음
     transparent: false,
     resizable: true,
     center: true,
@@ -68,9 +69,10 @@ function createMainWindow() {
     }
   })
 
-  const mainUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
-    ? `${process.env['ELECTRON_RENDERER_URL']}?mode=main`
-    : `file://${join(__dirname, '../renderer/index.html')}?mode=main`
+  const mainUrl =
+    is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? `${process.env['ELECTRON_RENDERER_URL']}?mode=main`
+      : `file://${join(__dirname, '../renderer/index.html')}?mode=main`
 
   mainWindow.loadURL(mainUrl)
 }
