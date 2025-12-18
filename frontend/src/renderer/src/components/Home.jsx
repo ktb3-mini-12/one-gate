@@ -665,6 +665,8 @@ export function Home({ user, session, onNavigateToSettings }) {
       {selectedCard && (
         <CardDetail
           {...selectedCard}
+          uploadFailed={failedCards.has(selectedCard.id)}
+          failReason={failedCards.get(selectedCard.id)}
           onClose={() => setSelectedCardId(null)}
           onUpload={handleUploadSingle}
           onDelete={handleDeleteSingle}

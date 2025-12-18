@@ -49,12 +49,21 @@ export function CardDetail({
   onClose,
   onUpload,
   onDelete,
-  isUploading
+  isUploading,
+  uploadFailed,
+  failReason
 }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [validationError, setValidationError] = useState(null)
-  const config = statusConfig[status] || statusConfig.pending
+
+  // 업로드 실패 시 failed 상태로 표시 (CardItem과 동일한 로직)
+  const effectiveStatus = uploadFailed ? 'failed' : status
+  const config = statusConfig[effectiveStatus] || statusConfig.pending
   const typeConfig = categoryTypeConfig[categoryType] || categoryTypeConfig['메모']
+
+  // 실패 시 라벨에 원인 표시
+  const statusLabel =
+    effectiveStatus === 'failed' && failReason ? `${config.label} (${failReason})` : config.label
 
   const isTemporary = status === 'analyzed'
   const isCalendar = rawData?.type === 'CALENDAR'
@@ -208,7 +217,7 @@ export function CardDetail({
                   boxShadow: `0 0 10px ${config.glow}`
                 }}
               />
-              <small style={{ color: config.color, fontWeight: '500' }}>{config.label}</small>
+              <small style={{ color: config.color, fontWeight: '500' }}>{statusLabel}</small>
             </div>
           </div>
 

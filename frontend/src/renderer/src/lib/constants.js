@@ -7,13 +7,10 @@ export const cardStatusConfig = {
 
 // CardDetail용 상태 설정 (상세 모달에서 사용)
 export const detailStatusConfig = {
-  pending: { label: '분석 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.4)' },
-  analyzed: {
-    label: '임시 저장',
-    color: 'var(--status-analyzing)',
-    glow: 'rgba(245, 158, 11, 0.45)'
-  },
-  completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.4)' }
+  pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.4)' },
+  analyzed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.4)' },
+  completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.4)' },
+  failed: { label: '실패', color: '#EF4444', glow: 'rgba(239, 68, 68, 0.4)' }
 }
 
 // 카테고리 타입 설정 (공용)
