@@ -17,6 +17,7 @@ export function Home({ user, session, onNavigateToSettings }) {
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(false)
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [toast, setToast] = useState(null)
 
   const showToast = (message, type = 'success') => {
@@ -319,7 +320,9 @@ export function Home({ user, session, onNavigateToSettings }) {
   }
 
   const handleCardClick = (id) => {
-    if (!isBulkSelectMode) {
+    if (isBulkSelectMode) {
+      handleCardSelect(id)
+    } else {
       setSelectedCardId(id)
     }
   }
@@ -452,7 +455,12 @@ export function Home({ user, session, onNavigateToSettings }) {
     }
   }
 
+  const handleLogoutClick = () => {
+    setShowLogoutConfirm(true)
+  }
+
   const handleLogout = () => {
+    setShowLogoutConfirm(false)
     clearGoogleToken()
     supabase.auth.signOut()
   }
@@ -532,7 +540,7 @@ export function Home({ user, session, onNavigateToSettings }) {
             </button>
 
             <button
-              onClick={handleLogout}
+              onClick={handleLogoutClick}
               className="p-2 rounded-xl transition-all hover:opacity-80"
               style={{ color: 'var(--text-secondary)' }}
             >
@@ -684,6 +692,18 @@ export function Home({ user, session, onNavigateToSettings }) {
         onConfirm={handleBulkDelete}
         onCancel={() => setShowBulkDeleteConfirm(false)}
         isDanger={true}
+      />
+
+      {/* Logout Confirmation */}
+      <ConfirmModal
+        isOpen={showLogoutConfirm}
+        title="로그아웃"
+        message="정말 로그아웃 하시겠습니까?"
+        confirmText="로그아웃"
+        cancelText="취소"
+        onConfirm={handleLogout}
+        onCancel={() => setShowLogoutConfirm(false)}
+        isDanger={false}
       />
 
       {/* Hide scrollbar */}

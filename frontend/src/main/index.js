@@ -364,11 +364,18 @@ ipcMain.on('show-main-window', () => {
   }
 })
 
-// IPC: 미니 창 크기 조절
+// IPC: 미니 창 크기 조절 (위로 늘어나게)
 ipcMain.on('resize-mini-window', (event, data) => {
   if (miniWindow) {
-    const height = typeof data === 'object' ? data.height : data
-    miniWindow.setSize(600, height, true)
+    const newHeight = typeof data === 'object' ? data.height : data
+    const [currentWidth, currentHeight] = miniWindow.getSize()
+    const [x, y] = miniWindow.getPosition()
+
+    // 높이 변화량만큼 y 위치 조정 (위로 늘어나게)
+    const deltaHeight = newHeight - currentHeight
+    const newY = y - deltaHeight
+
+    miniWindow.setBounds({ x, y: newY, width: 600, height: newHeight }, true)
   }
 })
 

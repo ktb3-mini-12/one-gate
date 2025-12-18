@@ -196,10 +196,14 @@ export function Settings({ user, onBack }) {
 
   const fetchNotionPages = async () => {
     if (!user?.id) return
+    console.log('[Notion] Fetching pages for user:', user.id)
     try {
       const res = await api.get('/notion/pages', { params: { user_id: user.id } })
+      console.log('[Notion] Pages response:', res.data)
       if (res.data.status === 'success') setNotionPages(res.data.data || [])
-    } catch {}
+    } catch (err) {
+      console.error('[Notion] Fetch pages error:', err)
+    }
   }
 
   const handleSetupNotionDatabase = async () => {
