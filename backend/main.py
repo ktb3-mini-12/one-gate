@@ -53,6 +53,11 @@ else:
     print("[AI] AI 라우터 비활성화 - fallback 분류 모드")
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
 class AnalyzeRequest(BaseModel):
     text: str
     user_id: str
