@@ -431,49 +431,54 @@ export function CardDetail({
               </div>
             )}
 
-            {/* Actions */}
-            <div className="flex gap-3">
-              <button
-                onClick={handleDeleteClick}
-                disabled={isUploading}
-                className="flex-1 py-3 rounded-2xl transition-all hover:opacity-80 disabled:opacity-50"
-                style={{
-                  background: 'var(--surface-gradient-top)',
-                  color: 'var(--text-secondary)',
-                  border: '1px solid var(--divider)',
-                  fontWeight: '500',
-                  fontSize: '14px'
-                }}
-              >
-                삭제
-              </button>
+            {/* Actions - pending 상태에서는 버튼 숨김 */}
+            {status !== 'pending' && (
+              <div className="flex gap-3">
+                <button
+                  onClick={handleDeleteClick}
+                  disabled={isUploading}
+                  className="flex-1 py-3 rounded-2xl transition-all hover:opacity-80 disabled:opacity-50"
+                  style={{
+                    background: 'var(--surface-gradient-top)',
+                    color: 'var(--text-secondary)',
+                    border: '1px solid var(--divider)',
+                    fontWeight: '500',
+                    fontSize: '14px'
+                  }}
+                >
+                  삭제
+                </button>
 
-              <button
-                onClick={handleUploadClick}
-                disabled={isUploading || status === 'pending'}
-                className="flex-1 py-3 rounded-2xl transition-all hover:opacity-90 disabled:opacity-70 flex items-center justify-center gap-2"
-                style={{
-                  background:
-                    'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
-                  color: '#fff',
-                  fontWeight: '500',
-                  fontSize: '14px',
-                  boxShadow: 'var(--shadow-glow-blue)'
-                }}
-              >
-                {isUploading ? (
-                  <>
-                    <div
-                      className="w-4 h-4 rounded-full animate-spin"
-                      style={{ border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff' }}
-                    />
-                    <span>업로드 중...</span>
-                  </>
-                ) : (
-                  '업로드'
-                )}
-              </button>
-            </div>
+                <button
+                  onClick={handleUploadClick}
+                  disabled={isUploading}
+                  className="flex-1 py-3 rounded-2xl transition-all hover:opacity-90 disabled:opacity-70 flex items-center justify-center gap-2"
+                  style={{
+                    background:
+                      'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
+                    color: '#fff',
+                    fontWeight: '500',
+                    fontSize: '14px',
+                    boxShadow: 'var(--shadow-glow-blue)'
+                  }}
+                >
+                  {isUploading ? (
+                    <>
+                      <div
+                        className="w-4 h-4 rounded-full animate-spin"
+                        style={{
+                          border: '2px solid rgba(255,255,255,0.3)',
+                          borderTopColor: '#fff'
+                        }}
+                      />
+                      <span>업로드 중...</span>
+                    </>
+                  ) : (
+                    '업로드'
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
