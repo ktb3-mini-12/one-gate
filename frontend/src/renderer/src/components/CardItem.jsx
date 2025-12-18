@@ -1,15 +1,20 @@
 import React from 'react'
 
 const statusConfig = {
-  analyzing: { label: '분석 중', color: 'var(--status-analyzing)' },
-  temporary: { label: '임시 저장', color: 'var(--status-temporary)' },
-  completed: { label: '완료', color: 'var(--status-completed)' }
+  pending: { label: '진행 중', color: 'var(--action-primary)', glow: 'rgba(59, 130, 246, 0.3)' },
+  completed: { label: '완료', color: 'var(--status-completed)', glow: 'rgba(16, 185, 129, 0.3)' }
+}
+
+const categoryTypeConfig = {
+  '일정': { color: '#4285F4', bg: 'rgba(66, 133, 244, 0.1)', border: 'rgba(66, 133, 244, 0.2)' },
+  '메모': { color: '#9AA0A6', bg: 'rgba(154, 160, 166, 0.1)', border: 'rgba(154, 160, 166, 0.2)' }
 }
 
 export function CardItem({
   id,
   summary,
   category,
+  categoryType,
   date,
   status,
   isSelected,
@@ -17,65 +22,126 @@ export function CardItem({
   onSelect,
   onClick
 }) {
-  const config = statusConfig[status]
-  const shouldReserveCheckboxSpace = showCheckbox && status === 'temporary'
+  const config = statusConfig[status] || statusConfig.pending
+  const typeConfig = categoryTypeConfig[categoryType] || categoryTypeConfig['메모']
 
   return (
     <div
       onClick={() => onClick?.(id)}
-      className="group relative rounded-[28px] p-6 transition-all duration-200 cursor-pointer hover:scale-[1.02]"
+      className="group relative rounded-[24px] p-5 transition-all duration-300 cursor-pointer"
       style={{
-        background: 'var(--surface-primary)',
-        border: isSelected ? '2px solid var(--action-primary)' : '2px solid transparent'
+        background: isSelected
+          ? 'linear-gradient(180deg, var(--surface-elevated) 0%, var(--surface-primary) 100%)'
+          : 'linear-gradient(180deg, var(--surface-primary) 0%, var(--surface-secondary) 100%)',
+        border: isSelected
+          ? '1px solid var(--action-primary)'
+          : '1px solid var(--divider)',
+        boxShadow: isSelected ? 'var(--shadow-glow-blue)' : 'var(--shadow-sm)',
+        transform: 'translateY(0)'
+      }}
+      onMouseEnter={(e) => {
+        if (!isSelected) {
+          e.currentTarget.style.transform = 'translateY(-2px)'
+          e.currentTarget.style.boxShadow = 'var(--shadow-md)'
+          e.currentTarget.style.borderColor = 'var(--divider-light)'
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!isSelected) {
+          e.currentTarget.style.transform = 'translateY(0)'
+          e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
+          e.currentTarget.style.borderColor = 'var(--divider)'
+        }
       }}
     >
-      {shouldReserveCheckboxSpace && (
-        <div className="absolute top-6 right-6">
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={(e) => {
+      {/* Checkbox */}
+      {showCheckbox && (
+        <div className="absolute top-5 right-5">
+          <div
+            className="w-5 h-5 rounded-lg flex items-center justify-center cursor-pointer transition-all"
+            onClick={(e) => {
               e.stopPropagation()
               onSelect?.(id)
             }}
-            className="w-4 h-4 rounded-lg cursor-pointer"
             style={{
-              accentColor: 'var(--action-primary)'
+              background: isSelected
+                ? 'var(--action-primary)'
+                : 'var(--surface-gradient-top)',
+              border: isSelected
+                ? '1px solid var(--action-primary)'
+                : '1px solid var(--divider-light)'
             }}
-          />
+          >
+            {isSelected && (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            )}
+          </div>
         </div>
       )}
 
-      <div className={`flex items-start gap-3 mb-4 ${shouldReserveCheckboxSpace ? 'pr-10' : ''}`}>
-        <div
-          className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${
-            status === 'analyzing' ? 'animate-pulse' : ''
-          }`}
-          style={{ background: config.color }}
-        />
-        <div className="flex-1 min-w-0 overflow-hidden">
-          <p className="truncate mb-2" style={{ color: 'var(--text-primary)' }}>
-            {summary}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-end gap-3">
+      {/* Category Type Badge */}
+      <div className="mb-3">
         <span
-          className="px-3 py-1 rounded-full"
+          className="px-2.5 py-1 rounded-lg text-xs font-medium"
           style={{
-            background: 'var(--surface-gradient-top)',
-            color: 'var(--text-secondary)',
-            fontSize: '12px'
+            background: typeConfig.bg,
+            color: typeConfig.color,
+            border: `1px solid ${typeConfig.border}`
           }}
         >
-          #{category}
+          {categoryType}
         </span>
-        <small style={{ color: 'var(--text-secondary)' }}>{date}</small>
       </div>
 
-      <div className="absolute bottom-6 left-6">
-        <small style={{ color: config.color, fontSize: '12px' }}>{config.label}</small>
+      {/* Content */}
+      <div className={`mb-4 ${showCheckbox ? 'pr-8' : ''}`}>
+        <p
+          className="line-clamp-2"
+          style={{
+            color: 'var(--text-primary)',
+            fontSize: '15px',
+            fontWeight: '500',
+            lineHeight: '1.5'
+          }}
+        >
+          {summary}
+        </p>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between">
+        {/* Status */}
+        <div className="flex items-center gap-2">
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{
+              background: config.color,
+              boxShadow: `0 0 8px ${config.glow}`
+            }}
+          />
+          <small style={{ color: config.color, fontSize: '11px', fontWeight: '500' }}>
+            {config.label}
+          </small>
+        </div>
+
+        {/* Date & Category */}
+        <div className="flex items-center gap-2">
+          {category && category !== 'general' && (
+            <span
+              className="px-2 py-0.5 rounded-md"
+              style={{
+                background: 'var(--surface-gradient-top)',
+                color: 'var(--text-secondary)',
+                fontSize: '11px'
+              }}
+            >
+              #{category}
+            </span>
+          )}
+          <small style={{ color: 'var(--text-tertiary)', fontSize: '11px' }}>{date}</small>
+        </div>
       </div>
     </div>
   )

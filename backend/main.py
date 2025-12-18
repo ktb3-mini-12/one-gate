@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
+from datetime import datetime
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
@@ -20,19 +21,18 @@ app.add_middleware(
 # --- [DTO] ---
 
 class AnalyzeRequest(BaseModel):
-    type: str
-    content: str
+    text: str
     user_id: str
     image_url: Optional[str] = None
-    tag_id: Optional[int] = None
+    category_id: Optional[int] = None
 
 class NotionMemoRequest(BaseModel):
     content: str
     category: str = "아이디어"
 
-class TagRequest(BaseModel):
+class CategoryRequest(BaseModel):
     name: str
-    category_type: str
+    type: str  # MEMO / CALENDAR
 
 class CalendarEvent(BaseModel):
     summary: str
@@ -55,17 +55,19 @@ CATEGORY_COLOR_MAP = {
 
 @app.post("/analyze")
 async def analyze_content(request: AnalyzeRequest):
-    print(f"[분석] user_id: {request.user_id}, 내용: {request.content[:30]}...")
+    print(f"[분석] user_id: {request.user_id}, 내용: {request.text[:30]}...")
 
-    is_calendar = "내일" in request.content or "시" in request.content or "일정" in request.content
-    category = "CALENDAR" if is_calendar else "MEMO"
+    # 간단한 분류 로직 (추후 AI로 대체)
+    is_calendar = "내일" in request.text or "시" in request.text or "일정" in request.text
+    input_type = "CALENDAR" if is_calendar else "MEMO"
 
     input_data = {
         "user_id": request.user_id,
-        "category": category,
-        "tag_id": request.tag_id,
-        "content": request.content,
+        "type": input_type,
+        "category_id": request.category_id,
+        "text": request.text,
         "image_url": request.image_url,
+        "status": "PENDING",  # 초기 상태
     }
 
     try:
@@ -76,8 +78,9 @@ async def analyze_content(request: AnalyzeRequest):
             "status": "success",
             "data": {
                 "id": record["id"] if record else None,
-                "category": category,
-                "content": request.content,
+                "type": input_type,
+                "text": request.text,
+                "status": "PENDING",
                 "created_at": record["created_at"] if record else None
             }
         }
@@ -86,39 +89,92 @@ async def analyze_content(request: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/records")
-async def get_records(user_id: str):
-    result = supabase.table("inputs")\
-        .select("*, tags(id, name, category_type)")\
+async def get_records(user_id: str, status: Optional[str] = None):
+    """
+    사용자의 레코드 목록 조회 (soft delete 제외)
+    - status: PENDING, ANALYZED, COMPLETED, CANCELED 필터링
+    """
+    query = supabase.table("inputs")\
+        .select("*, category(id, name, type)")\
         .eq("user_id", user_id)\
-        .order("created_at", desc=True)\
-        .execute()
+        .is_("deleted_at", "null")
+
+    if status:
+        query = query.eq("status", status)
+
+    result = query.order("created_at", desc=True).execute()
 
     return {"status": "success", "data": result.data}
 
 @app.delete("/records/{record_id}")
 async def delete_record(record_id: int):
-    result = supabase.table("inputs").delete().eq("id", record_id).execute()
+    """
+    레코드 소프트 삭제 (status=CANCELED, deleted_at 설정)
+    """
+    result = supabase.table("inputs")\
+        .update({
+            "status": "CANCELED",
+            "deleted_at": datetime.utcnow().isoformat()
+        })\
+        .eq("id", record_id)\
+        .execute()
 
     if result.data:
-        return {"status": "success", "message": "Record deleted"}
+        return {"status": "success", "message": "Record canceled"}
     return {"status": "error", "message": "Record not found"}
 
-@app.get("/tags")
-async def get_tags(category_type: Optional[str] = None):
-    query = supabase.table("tags").select("*")
-    if category_type:
-        query = query.eq("category_type", category_type)
+@app.post("/records/{record_id}/complete")
+async def complete_record(record_id: int):
+    """
+    레코드 완료 처리 (status=COMPLETED, 업로드 후 soft delete)
+    """
+    result = supabase.table("inputs")\
+        .update({
+            "status": "COMPLETED",
+            "deleted_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.utcnow().isoformat()
+        })\
+        .eq("id", record_id)\
+        .execute()
+
+    if result.data:
+        return {"status": "success", "message": "Record completed", "data": result.data[0]}
+    return {"status": "error", "message": "Record not found"}
+
+@app.get("/categories")
+async def get_categories(type: Optional[str] = None):
+    """
+    카테고리 목록 조회
+    - type: MEMO / CALENDAR 필터링
+    """
+    query = supabase.table("category").select("*")
+    if type:
+        query = query.eq("type", type)
     result = query.execute()
     return {"status": "success", "data": result.data}
 
-@app.post("/tags")
-async def create_tag(request: TagRequest):
-    result = supabase.table("tags").insert({
+@app.post("/categories")
+async def create_category(request: CategoryRequest):
+    """
+    카테고리 생성
+    """
+    result = supabase.table("category").insert({
         "name": request.name,
-        "category_type": request.category_type
+        "type": request.type
     }).execute()
 
     return {"status": "success", "data": result.data[0] if result.data else None}
+
+@app.delete("/categories/{category_id}")
+async def delete_category(category_id: int):
+    """
+    카테고리 삭제
+    """
+    result = supabase.table("category").delete().eq("id", category_id).execute()
+
+    if result.data:
+        return {"status": "success", "message": "Category deleted"}
+    return {"status": "error", "message": "Category not found"}
 
 # ----------------------------------
 # Google Calendar APIs
@@ -129,9 +185,9 @@ async def sync_google_calendars(
     google_token: str = Header(None, alias="X-Google-Token")
 ):
     """
-    Google Calendar 목록을 tags 테이블과 완전 동기화
+    Google Calendar 목록을 category 테이블과 완전 동기화
     - 사용자가 직접 만든 캘린더만 (accessRole=owner, primary 제외)
-    - Google에 없는 기존 태그는 삭제
+    - Google에 없는 기존 카테고리는 삭제
     """
     if not google_token:
         return {"status": "error", "message": "Google token required"}
@@ -166,23 +222,23 @@ async def sync_google_calendars(
 
             valid_calendar_names.append(cal_name)
 
-        # 1. 기존 CALENDAR 태그 모두 가져오기
-        existing_tags = supabase.table("tags")\
+        # 1. 기존 CALENDAR 카테고리 모두 가져오기
+        existing_categories = supabase.table("category")\
             .select("*")\
-            .eq("category_type", "CALENDAR")\
+            .eq("type", "CALENDAR")\
             .execute()
 
-        existing_names = {tag["name"] for tag in existing_tags.data} if existing_tags.data else set()
+        existing_names = {cat["name"] for cat in existing_categories.data} if existing_categories.data else set()
         valid_names_set = set(valid_calendar_names)
 
-        # 2. Google에 없는 태그 삭제
+        # 2. Google에 없는 카테고리 삭제
         to_delete = existing_names - valid_names_set
         deleted = []
         for name in to_delete:
-            supabase.table("tags")\
+            supabase.table("category")\
                 .delete()\
                 .eq("name", name)\
-                .eq("category_type", "CALENDAR")\
+                .eq("type", "CALENDAR")\
                 .execute()
             deleted.append(name)
 
@@ -190,9 +246,9 @@ async def sync_google_calendars(
         to_add = valid_names_set - existing_names
         added = []
         for name in to_add:
-            supabase.table("tags").insert({
+            supabase.table("category").insert({
                 "name": name,
-                "category_type": "CALENDAR"
+                "type": "CALENDAR"
             }).execute()
             added.append(name)
 
@@ -296,10 +352,10 @@ async def create_google_event_legacy(
 # Notion API
 # ----------------------------------
 
-@app.post("/notion/test-create")
+@app.post("/notion/create")
 async def create_notion_memo(request: NotionMemoRequest):
     """
-    노션 DB에 메모 생성 (테스트용)
+    노션 DB에 메모 생성
     - 내용: 제목 컬럼
     - 카테고리: 선택 컬럼 (기본값: 아이디어)
     """

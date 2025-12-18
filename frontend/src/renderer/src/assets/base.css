@@ -4,24 +4,62 @@
 @source "../../index.html";
 
 :root {
-  /* OneGate Design System Colors */
-  --app-bg: #3A3B3C;
-  --surface-primary: #1C1D1F;
-  --surface-gradient-top: #232427;
-  --divider: #2B2D30;
-  --text-primary: #C3C9CF;
-  --text-secondary: #8B9096;
-  --action-primary: #0E7BF6;
+  /* OneGate Premium Design System */
+
+  /* Background */
+  --app-bg: #18191B;
+
+  /* Surfaces */
+  --surface-primary: #1E1F23;
+  --surface-secondary: #232528;
+  --surface-gradient-top: #282A2E;
+  --surface-elevated: #2D2F33;
+
+  /* Dividers */
+  --divider: #2E3035;
+  --divider-light: #383A40;
+
+  /* Text */
+  --text-primary: #E8EAED;
+  --text-secondary: #9AA0A6;
+  --text-tertiary: #6B7280;
+
+  /* Accent Colors */
+  --action-primary: #3B82F6;
+  --action-primary-hover: #2563EB;
+  --action-secondary: #6366F1;
 
   /* Status Colors */
   --status-analyzing: #F59E0B;
-  --status-temporary: #8B9096;
+  --status-temporary: #6B7280;
   --status-completed: #10B981;
+  --status-error: #EF4444;
 
-  /* Shadows */
+  /* Service Colors */
+  --google-blue: #4285F4;
+  --notion-black: #191919;
+
+  /* Shadows - More dramatic for premium feel */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
   --shadow-deep: 0 16px 48px rgba(0, 0, 0, 0.6);
-  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.4);
-  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --shadow-glow-blue: 0 0 20px rgba(59, 130, 246, 0.3);
+  --shadow-glow-green: 0 0 20px rgba(16, 185, 129, 0.3);
+
+  /* Border Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-2xl: 32px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 350ms ease;
 }
 
 * {
@@ -31,33 +69,41 @@
 body {
   margin: 0;
   padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display', 'Segoe UI', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', sans-serif;
   background: var(--app-bg);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
 }
 
+/* Typography */
 h1 {
   font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.5px;
+  color: var(--text-primary);
 }
 
 h2 {
   font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.3px;
+  color: var(--text-primary);
 }
 
 h3 {
   font-size: 16px;
   font-weight: 600;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
 }
 
 p {
   font-size: 14px;
   font-weight: 500;
+  line-height: 1.5;
+  color: var(--text-primary);
 }
 
 small {
@@ -68,4 +114,141 @@ small {
 
 button {
   cursor: pointer;
+  font-family: inherit;
+  border: none;
+  background: none;
+  transition: all var(--transition-normal);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* Premium Card Styles */
+.card-premium {
+  background: linear-gradient(180deg, var(--surface-primary) 0%, var(--surface-secondary) 100%);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+
+.card-premium:hover {
+  border-color: var(--divider-light);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Glass Effect */
+.glass {
+  background: rgba(30, 31, 35, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Gradient Text */
+.gradient-text {
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow Effects */
+.glow-blue {
+  box-shadow: var(--shadow-glow-blue);
+}
+
+.glow-green {
+  box-shadow: var(--shadow-glow-green);
+}
+
+/* Input Styles */
+input, textarea {
+  font-family: inherit;
+  color: var(--text-primary);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+input:focus, textarea:focus {
+  outline: none;
+}
+
+/* Selection */
+::selection {
+  background: rgba(59, 130, 246, 0.3);
+  color: var(--text-primary);
+}
+
+/* Spinner */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Pulse */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Fade In */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+/* Scale In */
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out;
+}
+
+/* Slide Up */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
 }

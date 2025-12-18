@@ -32,12 +32,11 @@ function MiniInput({ user }) {
     }
   }
 
-  const analyze = async (content) => {
+  const analyze = async (text) => {
     setLoading(true)
     try {
       await axios.post('http://localhost:8000/analyze', {
-        type: 'text',
-        content,
+        text,
         user_id: user.id
       })
 
