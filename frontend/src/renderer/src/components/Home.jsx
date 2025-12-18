@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import axios from 'axios'
 import { supabase } from '../lib/supabase'
+import { api } from '../lib/api'
 import { CardItem } from './CardItem'
 import { CardDetail } from './CardDetail'
 import { ConfirmModal } from './ConfirmModal'
@@ -61,86 +61,55 @@ const LogoutIcon = () => (
   </svg>
 )
 
-// Mock data for testing UI
-const mockCards = [
-  {
-    id: '1',
-    summary: '내일 오후 2시 팀 미팅 참석하기',
-    category: 'Work',
-    date: '2024.12.18',
-    status: 'analyzing',
-    categoryType: '일정'
-  },
-  {
-    id: '2',
-    summary: '아이디어: AI 기반 일정 자동 분류 시스템 구현',
-    category: 'Ideas',
-    date: '2024.12.17',
-    status: 'temporary',
-    categoryType: '메모'
-  },
-  {
-    id: '3',
-    summary: '주간 보고서 작성 완료 - 마케팅팀 전달',
-    category: 'Personal',
-    date: '2024.12.16',
-    status: 'completed',
-    categoryType: '메모'
-  }
-]
-
 export function Home({ user, session, onNavigateToSettings }) {
   const [activeTab, setActiveTab] = useState('전체')
   const [isBulkSelectMode, setIsBulkSelectMode] = useState(false)
   const [selectedCards, setSelectedCards] = useState(new Set())
   const [selectedCardId, setSelectedCardId] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
-  const [cards, setCards] = useState(mockCards) // Use mock data
-  const [loading, setLoading] = useState(false) // Set to false for mock data
+  const [cards, setCards] = useState([])
+  const [loading, setLoading] = useState(false)
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
 
-  // // Fetch records from backend
-  // const fetchRecords = async () => {
-  //   if (!user?.id) return
-  //
-  //   setLoading(true)
-  //   try {
-  //     const res = await axios.get(`http://localhost:8000/records?user_id=${user.id}`)
-  //     if (res.data.status === 'success') {
-  //       const transformedCards = (res.data.data || []).map((record) => ({
-  //         id: String(record.id),
-  //         summary: record.content,
-  //         category: record.tags?.name || 'general',
-  //         date: new Date(record.created_at).toLocaleDateString('ko-KR'),
-  //         status: 'completed',
-  //         categoryType: record.category === 'CALENDAR' ? '일정' : '메모',
-  //         rawData: record
-  //       }))
-  //       setCards(transformedCards)
-  //     }
-  //   } catch (err) {
-  //     console.error('데이터 로드 실패:', err)
-  //   } finally {
-  //     setLoading(false)
-  //   }
-  // }
+  // Fetch records from backend
+  const fetchRecords = async () => {
+    if (!user?.id) return
 
-  // useEffect(() => {
-  //   if (user?.id) {
-  //     fetchRecords()
-  //   }
-  //
-  //   ipcRenderer.on('refresh-data', () => {
-  //     fetchRecords()
-  //   })
-  //
-  //   return () => ipcRenderer.removeAllListeners('refresh-data')
-  // }, [user?.id])
-
-  // Mock fetchRecords for refresh button
-  const fetchRecords = () => {
-    setCards(mockCards)
+    setLoading(true)
+    try {
+      const res = await api.get('/records', { params: { user_id: user.id } })
+      if (res.data?.status === 'success') {
+        const transformedCards = (res.data?.data || []).map((record) => ({
+          id: String(record.id),
+          summary: record.content,
+          category: record.tags?.name || 'general',
+          date: record.created_at ? new Date(record.created_at).toLocaleDateString('ko-KR') : '',
+          status: 'temporary',
+          categoryType: record.category === 'CALENDAR' ? '일정' : '메모',
+          rawData: record
+        }))
+        setCards(transformedCards)
+      }
+    } catch (err) {
+      console.error('데이터 로드 실패:', err)
+      setCards([])
+    } finally {
+      setLoading(false)
+    }
   }
+
+  useEffect(() => {
+    if (user?.id) {
+      fetchRecords()
+    } else {
+      setCards([])
+      setLoading(false)
+    }
+
+    ipcRenderer.on('refresh-data', fetchRecords)
+
+    return () => ipcRenderer.removeAllListeners('refresh-data')
+  }, [user?.id])
 
   const filteredCards = cards.filter(
     (card) => activeTab === '전체' || card.categoryType === activeTab
@@ -198,19 +167,40 @@ export function Home({ user, session, onNavigateToSettings }) {
 
     const formatDateTime = (date) => date.toISOString().slice(0, 19)
 
-    await fetch('http://localhost:8000/calendar/create', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Google-Token': googleToken
-      },
-      body: JSON.stringify({
+    const res = await api.post(
+      '/calendar/create',
+      {
         summary: record.content,
         description: `One Gate에서 등록된 일정`,
         start_time: formatDateTime(tomorrow),
         end_time: formatDateTime(endTime)
-      })
-    })
+      },
+      {
+        headers: {
+          'X-Google-Token': googleToken
+        }
+      }
+    )
+    return res.data
+  }
+
+  const addToNotion = async (record) => {
+    const payload = {
+      content: record.content,
+      category: record.tags?.name || '아이디어'
+    }
+
+    const res = await api.post('/notion/test-create', payload)
+    if (res.data?.status !== 'success') {
+      throw new Error(res.data?.message || 'Notion upload failed')
+    }
+    return res.data
+  }
+
+  const markCardCompleted = (cardId) => {
+    setCards((prev) =>
+      prev.map((card) => (card.id === String(cardId) ? { ...card, status: 'completed' } : card))
+    )
   }
 
   const handleBulkDeleteClick = () => {
@@ -221,7 +211,7 @@ export function Home({ user, session, onNavigateToSettings }) {
     setShowBulkDeleteConfirm(false)
     try {
       for (const cardId of selectedCards) {
-        await axios.delete(`http://localhost:8000/records/${cardId}`)
+        await api.delete(`/records/${cardId}`)
       }
       setCards(cards.filter((card) => !selectedCards.has(card.id)))
       setSelectedCards(new Set())
@@ -241,27 +231,40 @@ export function Home({ user, session, onNavigateToSettings }) {
     if (!selectedCardId) return
 
     const googleToken = localStorage.getItem('google_provider_token')
-    if (!googleToken) {
-      alert('Google 토큰이 없습니다. 재로그인 해주세요.')
-      return
-    }
-
     const card = cards.find((c) => c.id === selectedCardId)
-    if (card?.rawData?.category === 'CALENDAR') {
+    if (!card?.rawData?.category) return
+
+    if (card.rawData.category === 'CALENDAR') {
+      if (!googleToken) {
+        alert('Google 토큰이 없습니다. 재로그인 해주세요.')
+        return
+      }
       try {
         await addToCalendar(card.rawData, googleToken)
-        alert('Google 캘린더에 등록되었습니다!')
+        markCardCompleted(selectedCardId)
+        alert('Google 캘린더에 등록되었습니다.')
       } catch (err) {
         console.error('캘린더 등록 실패:', err)
       }
+      setSelectedCardId(null)
+      return
     }
-    setSelectedCardId(null)
+
+    try {
+      await addToNotion(card.rawData)
+      markCardCompleted(selectedCardId)
+      alert('Notion에 업로드되었습니다.')
+    } catch (err) {
+      console.error('Notion 업로드 실패:', err)
+    } finally {
+      setSelectedCardId(null)
+    }
   }
 
   const handleDeleteSingle = async () => {
     if (selectedCardId) {
       try {
-        await axios.delete(`http://localhost:8000/records/${selectedCardId}`)
+        await api.delete(`/records/${selectedCardId}`)
         setCards(cards.filter((card) => card.id !== selectedCardId))
         setSelectedCardId(null)
       } catch (err) {
