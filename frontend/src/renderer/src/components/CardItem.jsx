@@ -17,6 +17,7 @@ export function CardItem({
   categoryType,
   date,
   status,
+  imageUrl,
   isSelected,
   showCheckbox,
   onSelect,
@@ -78,6 +79,21 @@ export function CardItem({
               </svg>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Image Thumbnail */}
+      {imageUrl && (
+        <div className="mb-3 -mx-5 -mt-5">
+          <img
+            src={imageUrl}
+            alt="첨부 이미지"
+            className="w-full h-32 object-cover"
+            style={{
+              borderTopLeftRadius: '24px',
+              borderTopRightRadius: '24px'
+            }}
+          />
         </div>
       )}
 

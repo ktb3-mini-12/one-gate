@@ -90,6 +90,7 @@ export function Home({ user, session, onNavigateToSettings }) {
           date: record.created_at ? new Date(record.created_at).toLocaleDateString('ko-KR') : '',
           status: record.status?.toLowerCase() || 'pending',
           categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
+          imageUrl: record.image_url || null,
           rawData: record
         }))
         setCards(transformedCards)

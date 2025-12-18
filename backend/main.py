@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Header, Query, File, UploadFile, Form
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from datetime import datetime
+import uuid
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from notion_client import Client as NotionClient
@@ -70,20 +71,65 @@ CATEGORY_COLOR_MAP = {
 # ----------------------------------
 
 @app.post("/analyze")
-async def analyze_content(request: AnalyzeRequest):
-    print(f"[분석] user_id: {request.user_id}, 내용: {request.text[:30]}...")
+async def analyze_content(
+    user_id: str = Form(...),
+    text: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None)
+):
+    """
+    텍스트 또는 이미지 분석 (FormData로 수신)
+    """
+    display_text = text[:30] if text else "(이미지만)"
+    print(f"[분석] user_id: {user_id}, 내용: {display_text}..., 이미지: {'있음' if image else '없음'}")
+
+    # 이미지 처리 - Supabase Storage에 업로드
+    image_url = None
+    if image:
+        try:
+            image_content = await image.read()
+
+            # 파일명 생성: user_id/timestamp_uuid.확장자
+            file_ext = image.filename.split('.')[-1] if '.' in image.filename else 'png'
+            file_name = f"{user_id}/{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.{file_ext}"
+
+            # Supabase Storage에 업로드 (버킷: images)
+            storage_response = supabase.storage.from_('images').upload(
+                path=file_name,
+                file=image_content,
+                file_options={"content-type": image.content_type}
+            )
+
+            # 공개 URL 생성
+            image_url = supabase.storage.from_('images').get_public_url(file_name)
+            print(f"[분석] 이미지 업로드 완료: {image_url}")
+
+        except Exception as e:
+            print(f"[분석] 이미지 업로드 오류: {e}")
+            # 업로드 실패 시 base64 폴백
+            try:
+                await image.seek(0)
+                image_content = await image.read()
+                image_base64 = base64.b64encode(image_content).decode('utf-8')
+                image_url = f"data:{image.content_type};base64,{image_base64}"
+                print(f"[분석] base64 폴백 사용")
+            except Exception as e2:
+                print(f"[분석] base64 폴백도 실패: {e2}")
+
+    # 텍스트 또는 이미지가 없으면 에러
+    if not text and not image_url:
+        raise HTTPException(status_code=400, detail="텍스트 또는 이미지가 필요합니다")
 
     # 간단한 분류 로직 (추후 AI로 대체)
-    is_calendar = "내일" in request.text or "시" in request.text or "일정" in request.text
+    text_for_analysis = text or ""
+    is_calendar = "내일" in text_for_analysis or "시" in text_for_analysis or "일정" in text_for_analysis
     input_type = "CALENDAR" if is_calendar else "MEMO"
 
     input_data = {
-        "user_id": request.user_id,
+        "user_id": user_id,
         "type": input_type,
-        "category_id": request.category_id,
-        "text": request.text,
-        "image_url": request.image_url,
-        "status": "PENDING",  # 초기 상태
+        "text": text,
+        "image_url": image_url,
+        "status": "PENDING",
     }
 
     try:
@@ -95,7 +141,8 @@ async def analyze_content(request: AnalyzeRequest):
             "data": {
                 "id": record["id"] if record else None,
                 "type": input_type,
-                "text": request.text,
+                "text": text,
+                "has_image": image_url is not None,
                 "status": "PENDING",
                 "created_at": record["created_at"] if record else None
             }

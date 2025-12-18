@@ -11,7 +11,7 @@ const categoryTypeConfig = {
   '메모': { color: '#9AA0A6', bg: 'rgba(154, 160, 166, 0.15)', border: 'rgba(154, 160, 166, 0.3)', icon: '📝' }
 }
 
-export function CardDetail({ summary, category, categoryType, date, status, onClose, onUpload, onDelete, isUploading }) {
+export function CardDetail({ summary, category, categoryType, date, status, imageUrl, onClose, onUpload, onDelete, isUploading }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const config = statusConfig[status] || statusConfig.pending
   const typeConfig = categoryTypeConfig[categoryType] || categoryTypeConfig['메모']
@@ -97,6 +97,20 @@ export function CardDetail({ summary, category, categoryType, date, status, onCl
 
           {/* Content */}
           <div className="px-6 pb-6">
+            {/* Image */}
+            {imageUrl && (
+              <div className="mb-4 -mx-6">
+                <img
+                  src={imageUrl}
+                  alt="첨부 이미지"
+                  className="w-full max-h-64 object-contain"
+                  style={{
+                    background: 'var(--surface-secondary)'
+                  }}
+                />
+              </div>
+            )}
+
             {/* Summary */}
             <p
               className="mb-4"
