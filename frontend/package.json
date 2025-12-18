@@ -1,7 +1,12 @@
 {
-  "name": "frontend",
+  "name": "onegate",
   "version": "1.0.0",
   "description": "An Electron application with React",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ktb3-mini-12/one-gate.git",
+    "directory": "frontend"
+  },
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
@@ -12,10 +17,14 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "postinstall": "electron-builder install-app-deps",
+    "icons:mac": "bash ./scripts/generate-mac-icns.sh",
+    "icons:win": "bash ./scripts/generate-win-ico.sh",
+    "icons": "npm run icons:mac && npm run icons:win",
     "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "npm run build && electron-builder --mac",
-    "build:linux": "npm run build && electron-builder --linux"
+    "build:win": "npm run build && electron-builder --win --publish never",
+    "build:mac": "npm run build && electron-builder --mac --publish never",
+    "release:win": "npm run build && electron-builder --win --publish onTag",
+    "release:mac": "npm run build && electron-builder --mac --publish onTag"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
