@@ -29,6 +29,9 @@ NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
 
 router = APIRouter(prefix="/notion", tags=["Notion"])
 
+# Legacy router for OAuth callback (Notion redirect_uri compatibility)
+legacy_auth_router = APIRouter(prefix="/auth/notion", tags=["Notion OAuth Legacy"])
+
 
 @router.get("/auth")
 async def notion_auth(user_id: str):
@@ -106,6 +109,16 @@ async def notion_callback(code: str = Query(...), state: str = Query(...)):
     except Exception as e:
         print(f"[Notion OAuth] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Legacy callback endpoint for Notion OAuth redirect_uri compatibility
+@legacy_auth_router.get("/callback")
+async def notion_callback_legacy(code: str = Query(...), state: str = Query(...)):
+    """
+    Legacy OAuth callback endpoint.
+    Notion redirect_uri is set to /auth/notion/callback
+    """
+    return await notion_callback(code, state)
 
 
 @router.get("/auth/status")
@@ -187,6 +200,7 @@ async def get_notion_pages(user_id: str):
     - Returns page title, icon, and URL
     - Requires user's OAuth token
     """
+    print(f"[Notion Pages] Fetching pages for user: {user_id}")
     try:
         user_result = supabase.table("users")\
             .select("notion_access_token")\
@@ -195,15 +209,19 @@ async def get_notion_pages(user_id: str):
             .execute()
 
         if not user_result.data or not user_result.data.get("notion_access_token"):
+            print(f"[Notion Pages] No token found for user: {user_id}")
             return {"status": "error", "message": "Notion not connected"}
 
         token = user_result.data["notion_access_token"]
+        print(f"[Notion Pages] Token found, length: {len(token)}")
         user_notion = NotionClient(auth=token)
 
         # Search for pages
+        print("[Notion Pages] Searching for pages...")
         search_result = user_notion.search(
             filter={"property": "object", "value": "page"}
         )
+        print(f"[Notion Pages] Search returned {len(search_result.get('results', []))} results")
 
         pages = []
         for page in search_result.get("results", []):
@@ -230,10 +248,13 @@ async def get_notion_pages(user_id: str):
                 "url": page.get("url")
             })
 
+        print(f"[Notion Pages] Returning {len(pages)} pages")
         return {"status": "success", "data": pages}
 
     except Exception as e:
-        print(f"[Notion Pages] Error: {e}")
+        print(f"[Notion Pages] Error: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 

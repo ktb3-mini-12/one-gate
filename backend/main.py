@@ -123,6 +123,9 @@ app.include_router(records.router)
 # Notion router (/notion/*)
 app.include_router(notion.router)
 
+# Notion legacy auth router (/auth/notion/* - for OAuth redirect_uri compatibility)
+app.include_router(notion.legacy_auth_router)
+
 # Calendar router (/calendar/*)
 app.include_router(calendar.router)
 

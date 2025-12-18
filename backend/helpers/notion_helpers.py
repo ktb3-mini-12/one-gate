@@ -25,6 +25,20 @@ def detect_notion_properties(notion_client, database_id: str):
     db_info = notion_client.databases.retrieve(database_id=database_id)
     existing_properties = db_info.get("properties", {})
 
+    # Debug logging
+    print(f"[Notion] Database ID: {database_id}")
+    print(f"[Notion] Found {len(existing_properties)} properties:")
+    for prop_name, prop_config in existing_properties.items():
+        print(f"  - {prop_name}: {prop_config.get('type')}")
+
+    # Check if properties are empty (permission issue)
+    if not existing_properties:
+        raise PermissionError(
+            "Notion 데이터베이스에 접근 권한이 없습니다. "
+            "Notion에서 해당 데이터베이스를 Integration에 공유해주세요. "
+            "(데이터베이스 우측 상단 ··· → 연결 → One Gate 선택)"
+        )
+
     # 2. Find title property (must exist, use whatever name it has)
     title_property = None
     for prop_name, prop_config in existing_properties.items():
@@ -33,7 +47,9 @@ def detect_notion_properties(notion_client, database_id: str):
             break
 
     if not title_property:
-        raise ValueError("데이터베이스에 title 속성이 없습니다")
+        # Try to find any property that could be title-like
+        prop_types = {name: cfg.get("type") for name, cfg in existing_properties.items()}
+        raise ValueError(f"데이터베이스에 title 속성이 없습니다. 발견된 속성: {prop_types}")
 
     # 3. Find category property (try '카테고리' or 'Category')
     category_property = None
@@ -66,19 +82,36 @@ def add_notion_property(notion_client, database_id: str, property_name: str, pro
     )
 
 
-def get_notion_properties_cached(notion_client, database_id: str):
+def clear_notion_cache(database_id: str = None):
+    """Clear Notion property cache for a specific database or all."""
+    if database_id:
+        _notion_property_cache.pop(database_id, None)
+        print(f"[Notion] Cache cleared for database: {database_id}")
+    else:
+        _notion_property_cache.clear()
+        print("[Notion] All cache cleared")
+
+
+def get_notion_properties_cached(notion_client, database_id: str, force_refresh: bool = False):
     """
     Get properties with caching to avoid repeated API calls.
     """
     now = time.time()
 
+    # Force refresh if requested
+    if force_refresh and database_id in _notion_property_cache:
+        del _notion_property_cache[database_id]
+        print(f"[Notion] Force refreshing cache for: {database_id}")
+
     # Check cache
     if database_id in _notion_property_cache:
         cached = _notion_property_cache[database_id]
         if now - cached["timestamp"] < CACHE_TTL:
+            print(f"[Notion] Using cached properties for: {database_id}")
             return cached["props_info"]
 
     # Not cached or expired, detect fresh
+    print(f"[Notion] Fetching fresh properties for: {database_id}")
     props_info = detect_notion_properties(notion_client, database_id)
     _notion_property_cache[database_id] = {
         "props_info": props_info,
