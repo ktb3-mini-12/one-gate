@@ -5,8 +5,9 @@ Gemini 기반 입력 분석 서비스 (텍스트 / 이미지 / PDF)
 - 'CALENDAR' 또는 'MEMO' JSON을 반환
 - main.py에서 라우터로 통합: from ai.app import router
 
-환경변수:
-- GOOGLE_API_KEY (필수)
+환경변수 (둘 중 하나 필수):
+- GOOGLE_APPLICATION_CREDENTIALS: 서비스 계정 JSON 파일 경로
+- GOOGLE_API_KEY: API 키 (서비스 계정이 없을 경우 사용)
 - GEMINI_MODEL (선택, 기본: gemini-2.0-flash)
 """
 
@@ -53,14 +54,43 @@ KST = ZoneInfo("Asia/Seoul")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 API_KEY = os.getenv("GOOGLE_API_KEY")
+CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
 client = None
 
-if GENAI_AVAILABLE and API_KEY:
-    client = genai.Client(api_key=API_KEY)
+
+def _load_project_id_from_credentials(path: str) -> str | None:
+    """서비스 계정 JSON 파일에서 project_id를 읽어옵니다."""
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+            return data.get("project_id")
+    except Exception as e:
+        logger.error(f"서비스 계정 JSON 파일 읽기 실패: {e}")
+        return None
+
+
+if GENAI_AVAILABLE:
+    if CREDENTIALS_PATH and os.path.exists(CREDENTIALS_PATH):
+        # 서비스 계정 JSON 파일 사용 (Vertex AI 방식)
+        project_id = _load_project_id_from_credentials(CREDENTIALS_PATH)
+        if project_id:
+            client = genai.Client(
+                vertexai=True,
+                project=project_id,
+                location=VERTEX_LOCATION,
+            )
+            logger.info(f"Vertex AI 인증 사용 - project: {project_id}, location: {VERTEX_LOCATION}")
+        else:
+            logger.warning("서비스 계정 JSON에서 project_id를 찾을 수 없습니다.")
+    elif API_KEY:
+        # API 키 방식 사용
+        client = genai.Client(api_key=API_KEY)
+        logger.info("API 키 인증 사용")
+    else:
+        logger.warning("인증 정보가 없습니다. GOOGLE_APPLICATION_CREDENTIALS 또는 GOOGLE_API_KEY를 설정하세요.")
 elif not GENAI_AVAILABLE:
     logger.warning("google-genai 패키지가 설치되지 않았습니다. pip install google-genai")
-elif not API_KEY:
-    logger.warning("GOOGLE_API_KEY가 설정되지 않았습니다.")
 
 
 # ============ Pydantic Models ============
@@ -233,7 +263,7 @@ def _require_client():
     if client is None:
         raise HTTPException(
             status_code=500,
-            detail="Gemini API 키가 없습니다. GOOGLE_API_KEY를 .env에 설정하세요.",
+            detail="인증 정보가 없습니다. GOOGLE_APPLICATION_CREDENTIALS 또는 GOOGLE_API_KEY를 .env에 설정하세요.",
         )
     return client
 
@@ -455,9 +485,16 @@ async def analyze(
 
 @router.get("/health")
 async def health():
+    auth_method = None
+    if CREDENTIALS_PATH and os.path.exists(CREDENTIALS_PATH):
+        auth_method = "service_account"
+    elif API_KEY:
+        auth_method = "api_key"
+
     return {
         "status": "ok",
         "genai_available": GENAI_AVAILABLE,
-        "has_api_key": bool(API_KEY),
+        "auth_method": auth_method,
+        "has_credentials": bool(client),
         "model": MODEL,
     }
