@@ -27,6 +27,11 @@ env/
 .env.local
 .env.*.local
 
+# GCP Credentials
+*-credentials.json
+*credentials*.json
+service-account*.json
+
 # IDE
 .vscode/
 .idea/
