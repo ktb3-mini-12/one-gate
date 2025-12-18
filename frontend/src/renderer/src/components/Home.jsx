@@ -92,6 +92,11 @@ export function Home({ user, session, onNavigateToSettings }) {
           return prev
         }
 
+        // If status is COMPLETED, remove the card from UI
+        if (payload?.status === 'COMPLETED') {
+          return prev.filter((c) => c.id !== id)
+        }
+
         return prev.map((card) => {
           if (card.id !== id) return card
 
@@ -458,8 +463,8 @@ export function Home({ user, session, onNavigateToSettings }) {
         } else {
           showToast('Notion에 업로드되었습니다.', 'success')
         }
-        // 성공 시 화면에서 제거
-        removeCardFromUI(selectedCardId)
+        // Don't remove card here - wait for SSE event with status=COMPLETED
+        // Card will be removed by applyRecordEvent when status=COMPLETED arrives
       }
     } catch (err) {
       console.error('업로드 실패:', err)
@@ -618,8 +623,7 @@ export function Home({ user, session, onNavigateToSettings }) {
                   disabled={selectedCards.size === 0 || isUploading}
                   className="px-5 py-2 rounded-xl transition-all disabled:opacity-40"
                   style={{
-                    background:
-                      'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
+                    background: 'var(--action-primary)',
                     color: '#FFFFFF',
                     fontWeight: '500',
                     fontSize: '14px'

@@ -29,23 +29,8 @@ export function ConfirmModal({
         }}
       >
         {/* Header with Icon */}
-        <div
-          className="pt-8 pb-4 px-6 text-center"
-          style={{
-            background: isDanger
-              ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.1), transparent)'
-              : 'linear-gradient(135deg, rgba(59, 130, 246, 0.1), transparent)'
-          }}
-        >
-          <div
-            className="w-14 h-14 mx-auto rounded-2xl flex items-center justify-center mb-4"
-            style={{
-              background: isDanger ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-              border: isDanger
-                ? '1px solid rgba(239, 68, 68, 0.3)'
-                : '1px solid rgba(59, 130, 246, 0.3)'
-            }}
-          >
+        <div className="pt-8 pb-4 px-6 text-center">
+          <div className="w-14 h-14 mx-auto rounded-2xl flex items-center justify-center">
             <span style={{ fontSize: '24px' }}>{isDanger ? '⚠️' : '❓'}</span>
           </div>
 
@@ -82,13 +67,10 @@ export function ConfirmModal({
               onClick={onConfirm}
               className="flex-1 py-3 rounded-xl transition-all hover:opacity-90"
               style={{
-                background: isDanger
-                  ? 'linear-gradient(135deg, #EF4444, #DC2626)'
-                  : 'linear-gradient(135deg, var(--action-primary), var(--action-primary-hover))',
+                background: isDanger ? 'var(--status-error)' : 'var(--action-primary)',
                 color: '#fff',
                 fontWeight: '500',
-                fontSize: '14px',
-                boxShadow: isDanger ? '0 0 20px rgba(239, 68, 68, 0.3)' : 'var(--shadow-glow-blue)'
+                fontSize: '14px'
               }}
             >
               {confirmText}

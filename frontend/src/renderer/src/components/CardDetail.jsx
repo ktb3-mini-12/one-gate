@@ -72,7 +72,7 @@ export function CardDetail({
   const isCalendar = rawData?.type === 'CALENDAR'
   const originalText = rawData?.text || ''
   const imageUrl = rawData?.image_url
-  const errorMessage = isAnalysisFailed ? (analysis.error || 'AI 분석에 실패했습니다') : null
+  const errorMessage = isAnalysisFailed ? analysis.error || 'AI 분석에 실패했습니다' : null
 
   // 초기값 설정
   const initialBody =

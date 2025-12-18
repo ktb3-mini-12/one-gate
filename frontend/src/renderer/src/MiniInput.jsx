@@ -132,14 +132,14 @@ function MiniInput({ user }) {
       onDrop={handleDrop}
       style={{
         fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif',
-        background: 'linear-gradient(145deg, rgba(30, 32, 38, 0.95), rgba(22, 24, 28, 0.98))',
+        background: 'linear-gradient(145deg, var(--surface-primary), var(--app-bg))',
         borderRadius: '20px',
         overflow: 'hidden',
         boxShadow: isDragging
-          ? '0 0 0 2px rgba(99, 102, 241, 0.6), 0 25px 50px -12px rgba(0, 0, 0, 0.6), 0 0 40px rgba(99, 102, 241, 0.15)'
+          ? '0 0 0 2px var(--action-primary), 0 25px 50px -12px var(--action-secondary), 0 0 22px var(--action-secondary)'
           : isFocused
-          ? '0 0 0 1px rgba(99, 102, 241, 0.4), 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 30px rgba(99, 102, 241, 0.1)'
-          : '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05)',
+            ? '0 0 0 1px var(--action-primary), 0 25px 50px -12px var(--action-secondary), 0 0 18px var(--action-secondary)'
+            : '0 25px 50px -12px var(--action-secondary), 0 0 0 1px var(--divider)',
         backdropFilter: 'blur(20px)',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
         position: 'relative'
@@ -153,7 +153,8 @@ function MiniInput({ user }) {
           left: '10%',
           right: '10%',
           height: '1px',
-          background: 'linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.5), rgba(168, 85, 247, 0.5), transparent)',
+          background:
+            'linear-gradient(90deg, var(--surface-primary), var(--action-primary), var(--action-secondary), var(--surface-primary))',
           opacity: isFocused || hasContent ? 1 : 0.5,
           transition: 'opacity 0.3s ease'
         }}
@@ -167,8 +168,9 @@ function MiniInput({ user }) {
             display: 'flex',
             alignItems: 'center',
             gap: '14px',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-            background: 'linear-gradient(180deg, rgba(99, 102, 241, 0.08), transparent)'
+            borderBottom: '1px solid var(--divider)',
+            background:
+              'linear-gradient(180deg, var(--surface-gradient-top), var(--surface-primary))'
           }}
         >
           <div style={{ position: 'relative' }}>
@@ -176,7 +178,8 @@ function MiniInput({ user }) {
               style={{
                 padding: '3px',
                 borderRadius: '12px',
-                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.4), rgba(168, 85, 247, 0.4))'
+                background:
+                  'linear-gradient(135deg, var(--action-primary), var(--action-secondary))'
               }}
             >
               <img
@@ -200,20 +203,19 @@ function MiniInput({ user }) {
                 width: '22px',
                 height: '22px',
                 borderRadius: '50%',
-                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                background: 'var(--status-error)',
                 color: '#fff',
-                border: '2px solid rgba(22, 24, 28, 0.9)',
+                border: '2px solid var(--app-bg)',
                 cursor: 'pointer',
                 fontSize: '14px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontWeight: '600',
-                boxShadow: '0 2px 8px rgba(239, 68, 68, 0.4)',
                 transition: 'transform 0.2s ease'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
-              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.1)')}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
             >
               ×
             </button>
@@ -225,10 +227,10 @@ function MiniInput({ user }) {
                 height: '6px',
                 borderRadius: '50%',
                 background: 'linear-gradient(135deg, #10b981, #34d399)',
-                boxShadow: '0 0 8px rgba(16, 185, 129, 0.6)'
+                boxShadow: '0 0 8px #10b981'
               }}
             />
-            <span style={{ color: 'rgba(255, 255, 255, 0.6)', fontSize: '13px', fontWeight: '500' }}>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '13px', fontWeight: '500' }}>
               이미지 첨부됨
             </span>
           </div>
@@ -252,10 +254,10 @@ function MiniInput({ user }) {
             height: '36px',
             borderRadius: '10px',
             background: loading
-              ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2))'
+              ? 'linear-gradient(135deg, var(--action-primary), var(--action-secondary))'
               : image
-              ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(52, 211, 153, 0.2))'
-              : 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.15))',
+                ? 'linear-gradient(135deg, #10b981, #34d399)'
+                : 'linear-gradient(135deg, var(--action-primary), var(--action-secondary))',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -268,8 +270,8 @@ function MiniInput({ user }) {
               style={{
                 width: '18px',
                 height: '18px',
-                border: '2px solid rgba(99, 102, 241, 0.3)',
-                borderTopColor: '#6366f1',
+                border: '2px solid var(--divider-light)',
+                borderTopColor: 'var(--action-secondary)',
                 borderRadius: '50%',
                 animation: 'spin 0.8s linear infinite'
               }}
@@ -280,7 +282,7 @@ function MiniInput({ user }) {
               height="18"
               viewBox="0 0 24 24"
               fill="none"
-              stroke={image ? '#10b981' : '#6366f1'}
+              stroke={image ? '#10b981' : '#ffffff'}
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -320,7 +322,7 @@ function MiniInput({ user }) {
             fontWeight: '400',
             background: 'transparent',
             height: '100%',
-            color: 'rgba(255, 255, 255, 0.95)',
+            color: 'var(--text-primary)',
             letterSpacing: '-0.01em'
           }}
         />
@@ -329,7 +331,7 @@ function MiniInput({ user }) {
         {loading && (
           <span
             style={{
-              color: 'rgba(99, 102, 241, 0.9)',
+              color: 'var(--action-secondary)',
               fontSize: '13px',
               fontWeight: '500',
               display: 'flex',
@@ -349,23 +351,32 @@ function MiniInput({ user }) {
               gap: '6px',
               padding: '6px 12px',
               borderRadius: '8px',
-              background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.15))',
-              border: '1px solid rgba(99, 102, 241, 0.2)',
+              background: 'var(--action-primary)',
+              border: '1px solid var(--action-primary-hover)',
               cursor: 'pointer',
               transition: 'all 0.2s ease'
             }}
             onClick={analyze}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25))'
+              e.currentTarget.style.background = 'var(--action-primary-hover)'
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.15))'
+              e.currentTarget.style.background = 'var(--action-primary)'
             }}
           >
-            <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '12px', fontWeight: '500' }}>
+            <span style={{ color: 'var(--text-primary)', fontSize: '12px', fontWeight: '500' }}>
               Enter
             </span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(99, 102, 241, 0.9)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <line x1="5" y1="12" x2="19" y2="12" />
               <polyline points="12 5 19 12 12 19" />
             </svg>
@@ -385,10 +396,10 @@ function MiniInput({ user }) {
               style={{
                 padding: '3px 6px',
                 borderRadius: '4px',
-                background: 'rgba(255, 255, 255, 0.08)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
+                background: 'var(--surface-secondary)',
+                border: '1px solid var(--divider)',
                 fontSize: '10px',
-                color: 'rgba(255, 255, 255, 0.5)',
+                color: 'var(--text-tertiary)',
                 fontFamily: 'inherit'
               }}
             >
@@ -404,7 +415,7 @@ function MiniInput({ user }) {
           style={{
             position: 'absolute',
             inset: 0,
-            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.15))',
+            background: 'linear-gradient(135deg, var(--action-primary), var(--action-secondary))',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -420,16 +431,25 @@ function MiniInput({ user }) {
               gap: '10px',
               padding: '12px 20px',
               borderRadius: '12px',
-              background: 'rgba(99, 102, 241, 0.2)',
-              border: '1px dashed rgba(99, 102, 241, 0.5)'
+              background: 'var(--surface-primary)',
+              border: '1px dashed #ffffff'
             }}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
-            <span style={{ color: 'rgba(99, 102, 241, 0.9)', fontSize: '14px', fontWeight: '600' }}>
+            <span style={{ color: '#ffffff', fontSize: '14px', fontWeight: '600' }}>
               이미지 놓기
             </span>
           </div>
@@ -442,7 +462,7 @@ function MiniInput({ user }) {
           to { transform: rotate(360deg); }
         }
         input::placeholder {
-          color: rgba(255, 255, 255, 0.35);
+          color: var(--text-tertiary);
         }
         input:disabled {
           opacity: 0.7;
