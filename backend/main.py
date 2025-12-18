@@ -7,6 +7,13 @@ from googleapiclient.discovery import build
 
 from database import supabase, notion, NOTION_DB_ID
 
+# AI 라우터 (Gemini)
+try:
+    from ai.app import router as ai_router
+except Exception as e:
+    ai_router = None
+    print(f"[AI] 라우터 로드 실패: {e}")
+
 app = FastAPI()
 
 # CORS 설정
@@ -16,7 +23,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+if ai_router is not None:
+    app.include_router(ai_router)
 # --- [DTO] ---
 
 class AnalyzeRequest(BaseModel):

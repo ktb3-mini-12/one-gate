@@ -1,478 +1,332 @@
-import streamlit as st
-import base64
+"""
+ai/app.py
+
+Gemini 기반 입력 분석 서비스 (텍스트 / 이미지 / PDF)
+- 'schedule' 또는 'memo' JSON을 반환
+- 실행: uvicorn ai.app:app --reload
+
+환경변수:
+- GOOGLE_API_KEY (필수)
+- GEMINI_MODEL (선택, 기본: gemini-2.0-flash)
+"""
+
+from __future__ import annotations
+
 import json
-import re
-import time
-from io import BytesIO
-from PIL import Image
+import logging
 import os
+import re
 from datetime import datetime
+from typing import Literal, Optional
+
 from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from zoneinfo import ZoneInfo
+
+from google import genai
+from google.genai import types
 
 load_dotenv(override=True)
 
-# API clients
-import anthropic
-import openai
+# ============ Logging ============
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Google Gemini
-try:
-    import google.generativeai as genai
-    gemini_available = True
-except ImportError:
-    gemini_available = False
+KST = ZoneInfo("Asia/Seoul")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
-# PDF processing
-try:
-    import fitz  # PyMuPDF
-    pdf_available = True
-except ImportError:
-    pdf_available = False
+API_KEY = os.getenv("GOOGLE_API_KEY")
+client: Optional[genai.Client] = genai.Client(api_key=API_KEY) if API_KEY else None
 
-st.set_page_config(page_title="Smart Input Analyzer", layout="wide")
-st.title("Smart Input Analyzer")
-st.caption("이미지, 텍스트, PDF를 분석하여 일정 또는 메모로 분류합니다")
-
-# Load API keys
-anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-openai_key = os.environ.get("OPENAI_API_KEY", "")
-google_api_key = os.environ.get("GOOGLE_API_KEY", "")
-
-# Configure Gemini
-if google_api_key and gemini_available:
-    genai.configure(api_key=google_api_key)
-
-# Sidebar
-st.sidebar.header("API 상태")
-st.sidebar.write("✅ Claude" if anthropic_key else "❌ Claude")
-st.sidebar.write("✅ GPT-4" if openai_key else "❌ GPT-4")
-st.sidebar.write("✅ Gemini" if (google_api_key and gemini_available) else "❌ Gemini")
-st.sidebar.write("✅ PDF 처리" if pdf_available else "❌ PDF 처리")
+if not API_KEY:
+    logger.warning("GOOGLE_API_KEY가 설정되지 않았습니다.")
 
 
-# ============ Utility Functions ============
+# ============ Pydantic Models ============
+class CalendarData(BaseModel):
+    """일정(CALENDAR) 응답 모델"""
+    type: Literal["CALENDAR"]
+    summary: str
+    content: str
+    category: str
 
-def image_to_base64(image: Image.Image) -> str:
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+    start_time: Optional[str] = None  # ISO 8601 형식
+    end_time: Optional[str] = None
+    all_day: Optional[bool] = None
+    location: Optional[str] = None
+    attendees: Optional[list[str]] = None
+    recurrence: Optional[str] = None
+    meeting_url: Optional[str] = None
 
-
-def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
-    if not pdf_available:
-        return []
-    images = []
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        mat = fitz.Matrix(300/72, 300/72)
-        pix = page.get_pixmap(matrix=mat)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        images.append(img)
-    doc.close()
-    return images
-
-
-def pdf_to_text(pdf_bytes: bytes) -> str:
-    if not pdf_available:
-        return ""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    text_parts = []
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        text = page.get_text()
-        if text.strip():
-            text_parts.append(text)
-    doc.close()
-    return "\n\n".join(text_parts)
+    # CALENDAR에서는 사용하지 않음
+    body: Optional[str] = None
+    due_date: Optional[str] = None
+    memo_status: Optional[str] = None
 
 
-# ============ Analysis Prompt ============
+class MemoData(BaseModel):
+    """메모(MEMO) 응답 모델"""
+    type: Literal["MEMO"]
+    summary: str
+    content: str
+    category: str
 
-ANALYSIS_PROMPT = """당신은 입력된 내용을 분석하여 '일정(schedule)' 또는 '메모(memo)'로 분류하는 AI입니다.
+    # MEMO에서는 사용하지 않음
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    all_day: Optional[bool] = None
+    location: Optional[str] = None
+    attendees: Optional[list[str]] = None
+    recurrence: Optional[str] = None
+    meeting_url: Optional[str] = None
+
+    # MEMO 전용 필드
+    body: Optional[str] = None
+    due_date: Optional[str] = None  # YYYY-MM-DD
+    memo_status: Optional[str] = None  # "시작 전", "진행 중", "완료"
+    confidence: float  # MEMO일 때만 필수
+
+
+class AnalyzeResponse(BaseModel):
+    status: str
+    data: dict
+
+
+class HealthResponse(BaseModel):
+    status: str
+    has_api_key: bool
+    model: str
+
+
+# ============ FastAPI App ============
+app = FastAPI(
+    title="AI Analyzer (Gemini)",
+    description="텍스트/이미지/PDF를 분석하여 일정 또는 메모로 분류",
+    version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ============ Prompt ============
+
+ANALYSIS_PROMPT = """당신은 입력된 내용을 분석하여 'CALENDAR(일정)' 또는 'MEMO(메모)'로 분류하는 AI입니다.
 
 ## 분류 기준:
-- **일정(schedule)**: 시간, 장소, 할 일이 명확하게 포함된 경우
-- **메모(memo)**: 그 외 모든 경우 (사진, 메모, 아이디어 등)
+- **CALENDAR**: 특정 시간에 일어나는 일정, 약속, 미팅 등 (시간 정보가 명확한 경우)
+- **MEMO**: 할 일, 아이디어, 메모, 사진 등 (시간 정보가 없거나 불명확한 경우)
 
 ## 출력 형식 (반드시 JSON만 출력):
 
-### 일정인 경우:
+### CALENDAR인 경우:
 ```json
 {{
-  "type": "schedule",
-  "time": "2024-01-15 09:00",
-  "place": "장소명",
-  "summary": "일정 요약 (30자 이내)",
-  "categories": ["카테고리1", "카테고리2"]
+  "type": "CALENDAR",
+  "summary": "민수와 홍대 저녁 약속",
+  "content": "원본 입력 내용",
+  "category": "약속",
+  "start_time": "2025-12-19T19:00:00+09:00",
+  "end_time": "2025-12-19T21:00:00+09:00",
+  "all_day": false,
+  "location": "홍대",
+  "attendees": ["민수"],
+  "recurrence": null,
+  "meeting_url": null,
+  "body": null,
+  "due_date": null,
+  "memo_status": null
 }}
 ```
 
-### 메모인 경우:
+### MEMO인 경우:
 ```json
 {{
-  "type": "memo",
-  "categories": [
-    {{"category": "카테고리1", "confidence": 0.95}},
-    {{"category": "카테고리2", "confidence": 0.87}}
-  ]
+  "type": "MEMO",
+  "summary": "발표자료 제작",
+  "content": "원본 입력 내용",
+  "category": "할 일",
+  "start_time": null,
+  "end_time": null,
+  "all_day": null,
+  "location": null,
+  "attendees": null,
+  "recurrence": null,
+  "meeting_url": null,
+  "body": "발표자료를 완성해야 한다.",
+  "due_date": "2025-12-19",
+  "memo_status": "시작 전",
+  "confidence": 0.91
 }}
 ```
+
+## 필드 설명:
+- **type** (필수): "CALENDAR" 또는 "MEMO"
+- **summary** (필수): 핵심 요약 (30자 이내)
+- **content** (필수): 원본 입력 내용
+- **category** (필수): 단일 카테고리 (약속, 회의, 업무, 할 일, 아이디어, 일상 등)
+
+### CALENDAR 전용:
+- **start_time**: ISO 8601 형식 (예: 2025-12-19T19:00:00+09:00)
+- **end_time**: 종료 시간 (없으면 시작 후 2시간으로 설정)
+- **all_day**: 종일 일정 여부
+- **location**: 장소
+- **attendees**: 참석자 목록 (배열)
+- **recurrence**: 반복 규칙 (매일, 매주, 매월 등)
+- **meeting_url**: 화상회의 URL
+
+### MEMO 전용:
+- **body**: 상세 내용 또는 정리된 메모
+- **due_date**: 마감일 (YYYY-MM-DD 형식)
+- **memo_status**: "시작 전", "진행 중", "완료" 중 하나
+- **confidence** (필수): 분류 신뢰도 (0~1 사이)
 
 ## 카테고리 예시:
-- 일정: 회의, 개발, 업무, 약속, 병원, 운동, 공부, 여행, 가족, 친구
-- 메모: 일상, 음식, 풍경, 아이디어, 영감, 쇼핑, 독서, 영화, 음악, 산책
+- CALENDAR: 약속, 회의, 미팅, 병원, 운동, 수업, 여행, 공연, 예약
+- MEMO: 할 일, 아이디어, 영감, 쇼핑, 독서, 일상, 메모, 정보
 
 ## 주의사항:
-- 시간 형식: "YYYY-MM-DD HH:MM" (24시간제)
-- 시간이 "오전 9시"처럼 되어있으면 오늘 날짜 기준으로 변환
 - 오늘 날짜: {today}
-- confidence는 0~1 사이 값
-- 메모의 카테고리는 최대 2개까지만 출력
+- 시간대는 항상 한국 시간(+09:00) 사용
+- "내일", "다음주" 등 상대 시간은 오늘 기준으로 계산
 - 반드시 유효한 JSON만 출력하세요. 다른 텍스트는 포함하지 마세요."""
 
 
-# ============ AI Analysis Functions ============
+# ============ Helpers ============
 
-def analyze_with_claude(content: str = None, image_base64: str = None, pdf_base64: str = None) -> tuple[dict, float]:
-    start_time = time.time()
-    client = anthropic.Anthropic(api_key=anthropic_key)
-    today = datetime.now().strftime("%Y-%m-%d")
-    prompt = ANALYSIS_PROMPT.format(today=today)
-
-    messages_content = []
-
-    # PDF 직접 전송
-    if pdf_base64:
-        messages_content.append({
-            "type": "document",
-            "source": {
-                "type": "base64",
-                "media_type": "application/pdf",
-                "data": pdf_base64
-            }
-        })
-        messages_content.append({"type": "text", "text": prompt + "\n\n이 PDF 문서를 분석해주세요."})
-    # 이미지 전송
-    elif image_base64:
-        messages_content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": image_base64}
-        })
-        messages_content.append({"type": "text", "text": prompt + "\n\n이 이미지를 분석해주세요."})
-    # 텍스트 전송
-    else:
-        messages_content.append({"type": "text", "text": prompt + f"\n\n분석할 내용:\n{content}"})
-
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": messages_content}]
-    )
-    elapsed = time.time() - start_time
-    return parse_json_response(response.content[0].text), elapsed
+def _today_kst_str() -> str:
+    return datetime.now(KST).strftime("%Y-%m-%d")
 
 
-def analyze_with_gpt4(content: str = None, image_base64: str = None) -> tuple[dict, float]:
-    """GPT-4는 PDF 직접 지원 안 함 - 이미지 또는 텍스트만"""
-    start_time = time.time()
-    client = openai.OpenAI(api_key=openai_key)
-    today = datetime.now().strftime("%Y-%m-%d")
-    prompt = ANALYSIS_PROMPT.format(today=today)
-
-    messages_content = []
-    if image_base64:
-        messages_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}})
-        messages_content.append({"type": "text", "text": prompt + "\n\n이 이미지를 분석해주세요."})
-    else:
-        messages_content.append({"type": "text", "text": prompt + f"\n\n분석할 내용:\n{content}"})
-
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": messages_content}]
-    )
-    elapsed = time.time() - start_time
-    return parse_json_response(response.choices[0].message.content), elapsed
-
-
-def analyze_with_gemini(content: str = None, image: Image.Image = None, pdf_bytes: bytes = None) -> tuple[dict, float]:
-    start_time = time.time()
-    today = datetime.now().strftime("%Y-%m-%d")
-    prompt = ANALYSIS_PROMPT.format(today=today)
-
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
-
-    # PDF 직접 전송
-    if pdf_bytes:
-        # Gemini는 파일 업로드 방식 사용
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(pdf_bytes)
-            tmp_path = tmp.name
-
-        uploaded_file = genai.upload_file(tmp_path, mime_type="application/pdf")
-        response = model.generate_content([
-            prompt + "\n\n이 PDF 문서를 분석해주세요.",
-            uploaded_file
-        ])
-        # 임시 파일 삭제
-        os.unlink(tmp_path)
-    # 이미지 전송
-    elif image:
-        response = model.generate_content([
-            prompt + "\n\n이 이미지를 분석해주세요.",
-            image
-        ])
-    # 텍스트 전송
-    else:
-        response = model.generate_content(prompt + f"\n\n분석할 내용:\n{content}")
-
-    elapsed = time.time() - start_time
-    return parse_json_response(response.text), elapsed
-
-
-def parse_json_response(text: str) -> dict:
+def _parse_json_response(text: str) -> dict:
+    """
+    모델이 ```json ...``` 으로 감싸거나, 앞/뒤에 설명을 붙여도 최대한 JSON만 뽑아냅니다.
+    """
     try:
-        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', text)
-        if json_match:
-            return json.loads(json_match.group(1))
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if json_match:
-            return json.loads(json_match.group())
-    except json.JSONDecodeError:
-        pass
-    return {"error": "JSON 파싱 실패", "raw": text}
+        # ```json ... ```
+        m = re.search(r"```json\s*([\s\S]*?)\s*```", text)
+        if m:
+            return json.loads(m.group(1))
+
+        # 첫 { 부터 마지막 } 까지
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            return json.loads(m.group(0))
+
+        return {"error": "JSON 파싱 실패", "raw": text}
+    except Exception:
+        return {"error": "JSON 파싱 실패", "raw": text}
 
 
-# ============ Main App ============
+def _require_client() -> genai.Client:
+    if client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Gemini API 키가 없습니다. GOOGLE_API_KEY 또는 GEMINI_API_KEY를 .env에 설정하세요.",
+        )
+    return client
 
-# 입력 타입 선택
-st.subheader("1. 입력")
-input_type = st.radio("입력 타입", ["이미지", "텍스트", "PDF"], horizontal=True)
 
-content_to_analyze = None
-image_for_gemini = None
-image_base64_for_vision = None
-pdf_bytes_for_api = None
-pdf_mode = None
+def _guess_image_mime(upload: UploadFile) -> str:
+    # FastAPI UploadFile.content_type을 최대한 신뢰하되, 없으면 기본값
+    ct = (upload.content_type or "").lower()
+    if ct.startswith("image/"):
+        return ct
+    # fallback: 확장자 기준
+    name = (upload.filename or "").lower()
+    if name.endswith(".png"):
+        return "image/png"
+    if name.endswith(".webp"):
+        return "image/webp"
+    return "image/jpeg"
 
-if input_type == "이미지":
-    uploaded_file = st.file_uploader("이미지 업로드", type=["png", "jpg", "jpeg", "webp", "gif", "bmp"])
-    if uploaded_file:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="업로드된 이미지", use_container_width=True)
-        image_for_gemini = image
-        image_base64_for_vision = image_to_base64(image)
 
-elif input_type == "텍스트":
-    text_input = st.text_area("텍스트 입력", height=150, placeholder="예: 내일 오전 9시 타운홀에서 개발 회의")
-    if text_input:
-        content_to_analyze = text_input
+async def _read_upload_bytes(upload: UploadFile) -> bytes:
+    data = await upload.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="업로드된 파일이 비어있습니다.")
+    return data
 
-elif input_type == "PDF":
-    if not pdf_available:
-        st.error("PDF 처리를 위해 PyMuPDF가 필요합니다.")
-    else:
-        uploaded_pdf = st.file_uploader("PDF 업로드", type=["pdf"])
-        if uploaded_pdf:
-            pdf_bytes = uploaded_pdf.getvalue()
 
-            # PDF 처리 방식 선택
-            pdf_mode = st.radio(
-                "PDF 처리 방식",
-                ["PDF 직접 전송 (Claude, Gemini)", "이미지로 변환 (모든 AI)", "텍스트 추출 (빠름)"],
-                horizontal=True
-            )
+def _build_prompt() -> str:
+    return ANALYSIS_PROMPT.format(today=_today_kst_str())
 
-            # 안내 메시지
-            if pdf_mode == "PDF 직접 전송 (Claude, Gemini)":
-                st.info("📄 PDF를 직접 API로 전송합니다. Claude와 Gemini만 지원됩니다.")
-            elif pdf_mode == "이미지로 변환 (모든 AI)":
-                st.info("🖼️ PDF를 이미지로 변환하여 분석합니다. 모든 AI에서 사용 가능합니다.")
-            else:
-                st.info("📝 PDF에서 텍스트만 추출합니다. 가장 빠르지만 이미지는 분석되지 않습니다.")
 
-            # 미리보기
-            col_preview1, col_preview2 = st.columns(2)
+def _gemini_generate(contents: list[types.Part | str]) -> dict:
+    """google-genai SDK 호출 (JSON 응답 강제)"""
+    c = _require_client()
+    prompt = _build_prompt()
+    final_contents = list(contents) + [prompt]
 
-            # 텍스트 추출 미리보기
-            extracted_text = pdf_to_text(pdf_bytes)
-            with col_preview1:
-                st.markdown("**추출된 텍스트:**")
-                if extracted_text.strip():
-                    st.text_area("텍스트 미리보기", extracted_text[:500], height=150, disabled=True)
-                else:
-                    st.warning("텍스트가 감지되지 않았습니다.")
+    try:
+        logger.info(f"Gemini API 호출 - 모델: {MODEL}")
+        resp = c.models.generate_content(
+            model=MODEL,
+            contents=final_contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.2,
+                max_output_tokens=1024,
+            ),
+        )
+        result = _parse_json_response(resp.text or "")
+        logger.info(f"분석 완료 - 타입: {result.get('type', 'unknown')}")
+        return result
+    except Exception as e:
+        logger.error(f"Gemini 호출 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Gemini 호출 실패: {e}")
 
-            # 이미지 변환 미리보기
-            pdf_images = pdf_to_images(pdf_bytes)
-            with col_preview2:
-                st.markdown("**PDF 이미지:**")
-                if pdf_images:
-                    st.image(pdf_images[0], caption=f"첫 페이지 (총 {len(pdf_images)}페이지)", use_container_width=True)
 
-            # 선택에 따라 데이터 설정
-            if pdf_mode == "PDF 직접 전송 (Claude, Gemini)":
-                pdf_bytes_for_api = pdf_bytes
+# ============ API ============
 
-            elif pdf_mode == "이미지로 변환 (모든 AI)":
-                if pdf_images:
-                    image_for_gemini = pdf_images[0]
-                    image_base64_for_vision = image_to_base64(pdf_images[0])
-                else:
-                    st.error("이미지 변환에 실패했습니다.")
+InputType = Literal["text", "image", "pdf"]
 
-            elif pdf_mode == "텍스트 추출 (빠름)":
-                if extracted_text.strip():
-                    content_to_analyze = extracted_text
-                else:
-                    st.warning("텍스트가 없습니다. 다른 방식을 선택해주세요.")
 
-# AI 선택 및 분석
-if content_to_analyze or image_base64_for_vision or pdf_bytes_for_api:
-    st.subheader("2. AI 선택")
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(
+    type: InputType = Form(..., description="입력 타입: text, image, pdf"),
+    content: Optional[str] = Form(None, description="텍스트 내용 (type=text일 때)"),
+    file: Optional[UploadFile] = File(None, description="파일 (type=image/pdf일 때)"),
+):
+    """입력을 분석하여 일정(schedule) 또는 메모(memo)로 분류"""
+    logger.info(f"분석 요청 - 타입: {type}")
 
-    # PDF 직접 전송 모드일 때 GPT-4 비활성화
-    if pdf_mode == "PDF 직접 전송 (Claude, Gemini)":
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            use_claude = st.checkbox("Claude", value=bool(anthropic_key), disabled=not anthropic_key)
-        with col2:
-            use_gpt4 = st.checkbox("GPT-4 (미지원)", value=False, disabled=True)
-            st.caption("PDF 직접 전송 미지원")
-        with col3:
-            use_gemini = st.checkbox("Gemini", value=bool(google_api_key and gemini_available), disabled=not (google_api_key and gemini_available))
-    else:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            use_claude = st.checkbox("Claude", value=bool(anthropic_key), disabled=not anthropic_key)
-        with col2:
-            use_gpt4 = st.checkbox("GPT-4", value=False, disabled=not openai_key)
-        with col3:
-            use_gemini = st.checkbox("Gemini", value=bool(google_api_key and gemini_available), disabled=not (google_api_key and gemini_available))
+    if type == "text":
+        if not content or not content.strip():
+            raise HTTPException(status_code=400, detail="type=text인 경우 content가 필요합니다.")
+        data = _gemini_generate([f"분석할 내용:\n{content.strip()}"])
+        return AnalyzeResponse(status="success", data=data)
 
-    if st.button("분석 시작", type="primary"):
-        results = {}
+    if type in ("image", "pdf"):
+        if file is None:
+            raise HTTPException(status_code=400, detail=f"type={type}인 경우 file이 필요합니다.")
 
-        with st.spinner("분석 중..."):
-            # PDF 직접 전송 모드
-            if pdf_bytes_for_api:
-                pdf_base64 = base64.b64encode(pdf_bytes_for_api).decode("utf-8")
+        file_bytes = await _read_upload_bytes(file)
+        logger.info(f"파일 수신 - 크기: {len(file_bytes)} bytes")
 
-                if use_claude:
-                    try:
-                        result, elapsed = analyze_with_claude(pdf_base64=pdf_base64)
-                        results["Claude"] = {"data": result, "time": elapsed}
-                    except Exception as e:
-                        results["Claude"] = {"data": {"error": str(e)}, "time": 0}
+        if type == "image":
+            mime = _guess_image_mime(file)
+            part = types.Part.from_bytes(data=file_bytes, mime_type=mime)
+            data = _gemini_generate([part, "이 이미지를 분석해주세요."])
+        else:
+            part = types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")
+            data = _gemini_generate([part, "이 PDF 문서를 분석해주세요."])
 
-                if use_gemini:
-                    try:
-                        result, elapsed = analyze_with_gemini(pdf_bytes=pdf_bytes_for_api)
-                        results["Gemini"] = {"data": result, "time": elapsed}
-                    except Exception as e:
-                        results["Gemini"] = {"data": {"error": str(e)}, "time": 0}
+        return AnalyzeResponse(status="success", data=data)
 
-            # 이미지 또는 텍스트 모드
-            else:
-                if use_claude:
-                    try:
-                        result, elapsed = analyze_with_claude(content_to_analyze, image_base64_for_vision)
-                        results["Claude"] = {"data": result, "time": elapsed}
-                    except Exception as e:
-                        results["Claude"] = {"data": {"error": str(e)}, "time": 0}
+    raise HTTPException(status_code=400, detail="지원하지 않는 type입니다. (text/image/pdf)")
 
-                if use_gpt4:
-                    try:
-                        result, elapsed = analyze_with_gpt4(content_to_analyze, image_base64_for_vision)
-                        results["GPT-4"] = {"data": result, "time": elapsed}
-                    except Exception as e:
-                        results["GPT-4"] = {"data": {"error": str(e)}, "time": 0}
 
-                if use_gemini:
-                    try:
-                        result, elapsed = analyze_with_gemini(content_to_analyze, image_for_gemini)
-                        results["Gemini"] = {"data": result, "time": elapsed}
-                    except Exception as e:
-                        results["Gemini"] = {"data": {"error": str(e)}, "time": 0}
-
-        # ============ 결과 표시 ============
-        st.subheader("3. 분석 결과")
-
-        # 시간 비교 차트
-        time_data = {name: info["time"] for name, info in results.items() if info["time"] > 0}
-        if time_data:
-            st.markdown("#### 소요 시간 비교")
-            st.bar_chart(time_data)
-
-        for ai_name, info in results.items():
-            result = info["data"]
-            elapsed_time = info["time"]
-
-            with st.container():
-                col_title, col_time = st.columns([3, 1])
-                with col_title:
-                    st.markdown(f"### {ai_name}")
-                with col_time:
-                    if elapsed_time > 0:
-                        st.metric("소요 시간", f"{elapsed_time:.2f}초")
-
-                if "error" in result:
-                    st.error(f"오류: {result['error']}")
-                    if "raw" in result:
-                        st.text(result["raw"])
-                    continue
-
-                result_type = result.get("type", "")
-
-                # 일정인 경우
-                if result_type == "schedule":
-                    st.markdown("#### 📅 일정")
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown(f"""
-| 항목 | 내용 |
-|------|------|
-| **시간** | {result.get('time', '-')} |
-| **장소** | {result.get('place', '-')} |
-| **요약** | {result.get('summary', '-')} |
-                        """)
-
-                    with col2:
-                        categories = result.get('categories', [])
-                        st.markdown("**카테고리**")
-                        cat_html = ""
-                        for cat in categories:
-                            cat_html += f"<span style='background-color: #4A90D9; color: white; padding: 4px 12px; border-radius: 15px; margin-right: 8px; display: inline-block; margin-bottom: 4px;'>{cat}</span>"
-                        st.markdown(cat_html, unsafe_allow_html=True)
-
-                    with st.expander("JSON 보기"):
-                        st.code(json.dumps(result, ensure_ascii=False, indent=2), language="json")
-
-                # 메모인 경우
-                elif result_type == "memo":
-                    st.markdown("#### 📝 메모")
-
-                    st.markdown("**카테고리**")
-                    categories = result.get('categories', [])
-                    for cat in categories:
-                        if isinstance(cat, dict):
-                            cat_name = cat.get('category', '')
-                            conf = cat.get('confidence', 0)
-                            bar_color = "#4CAF50" if conf >= 0.8 else "#FFC107" if conf >= 0.5 else "#F44336"
-                            st.markdown(f"""
-<div style="margin-bottom: 12px;">
-    <span style='background-color: #9C27B0; color: white; padding: 4px 12px; border-radius: 15px; margin-right: 8px;'>{cat_name}</span>
-    <span style="color: #888; margin-left: 8px;">{conf:.0%}</span>
-    <div style="background-color: #eee; border-radius: 4px; height: 8px; margin-top: 8px; max-width: 300px;">
-        <div style="background-color: {bar_color}; width: {conf*100}%; height: 8px; border-radius: 4px;"></div>
-    </div>
-</div>
-                            """, unsafe_allow_html=True)
-
-                    with st.expander("JSON 보기"):
-                        st.code(json.dumps(result, ensure_ascii=False, indent=2), language="json")
-
-                st.divider()
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "has_api_key": bool(API_KEY),
+        "model": MODEL,
+    }
