@@ -31,11 +31,8 @@ export function Home({ user, session, onNavigateToSettings }) {
     try {
       const res = await api.get('/records', { params: { user_id: user.id } })
       if (res.data?.status === 'success') {
-        const now = new Date()
         const transformedCards = (res.data?.data || []).map((record) => {
           const createdAt = record.created_at ? new Date(record.created_at) : null
-          const pendingMinutes = createdAt ? (now - createdAt) / 1000 / 60 : 0
-          const isStale = record.status === 'PENDING' && pendingMinutes > 2
 
           return {
             id: String(record.id),
@@ -44,7 +41,6 @@ export function Home({ user, session, onNavigateToSettings }) {
             date: createdAt ? createdAt.toLocaleDateString('ko-KR') : '',
             status: record.status?.toLowerCase() || 'pending',
             categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
-            isStale,
             rawData: record
           }
         })
@@ -135,14 +131,13 @@ export function Home({ user, session, onNavigateToSettings }) {
           // 새 카드를 목록 최상단에 추가
           const newCard = {
             id: String(recordId),
-            summary: payload.text || '분석 중...',
+            summary: payload.text || '진행 중...',
             category: 'general',
             date: payload.created_at
               ? new Date(payload.created_at).toLocaleDateString('ko-KR')
               : new Date().toLocaleDateString('ko-KR'),
             status: 'pending',
             categoryType: payload.type === 'CALENDAR' ? '일정' : '메모',
-            isStale: false,
             rawData: {
               id: recordId,
               status: 'PENDING',
@@ -232,11 +227,12 @@ export function Home({ user, session, onNavigateToSettings }) {
 
   const handleBulkUpload = async () => {
     const googleToken = getGoogleToken()
+    const isDev = import.meta.env.DEV
 
     setIsUploading(true)
     let successCount = 0
     let failedCount = 0
-    const newFailedIds = new Set()
+    const newFailedCards = new Map()
 
     try {
       for (const cardId of selectedCards) {
@@ -249,7 +245,8 @@ export function Home({ user, session, onNavigateToSettings }) {
 
         const recordType = card.rawData?.result?.type || card.rawData?.type
         if (recordType === 'CALENDAR' && !googleToken) {
-          newFailedIds.add(cardId)
+          const reason = isDev ? 'Google 토큰 없음/만료' : '로그인 필요'
+          newFailedCards.set(cardId, reason)
           failedCount++
           continue
         }
@@ -269,14 +266,19 @@ export function Home({ user, session, onNavigateToSettings }) {
           }
         } catch (err) {
           console.error(`업로드 실패 (${cardId}):`, err)
-          newFailedIds.add(cardId)
+          const reason = getFailReason(err, recordType)
+          newFailedCards.set(cardId, reason)
           failedCount++
         }
       }
 
       // 실패한 카드 표시
-      if (newFailedIds.size > 0) {
-        setFailedCardIds((prev) => new Set([...prev, ...newFailedIds]))
+      if (newFailedCards.size > 0) {
+        setFailedCards((prev) => {
+          const next = new Map(prev)
+          newFailedCards.forEach((reason, cardId) => next.set(cardId, reason))
+          return next
+        })
       }
 
       if (successCount > 0) {
@@ -322,8 +324,61 @@ export function Home({ user, session, onNavigateToSettings }) {
     }
   }
 
-  // 업로드 실패한 카드 ID 추적 (UI 전용)
-  const [failedCardIds, setFailedCardIds] = useState(new Set())
+  // 업로드 실패한 카드 추적 (cardId → reason)
+  const [failedCards, setFailedCards] = useState(new Map())
+
+  // 에러 원인 추출 함수 (dev: 기술적 메시지, prod: 유저 친화적 메시지)
+  const getFailReason = (error, recordType) => {
+    const isDev = import.meta.env.DEV
+
+    // 네트워크 오류 (error.response 없음)
+    if (!error.response) {
+      if (error.code === 'ECONNABORTED') {
+        return isDev ? '타임아웃' : '타임아웃 초과'
+      }
+      return isDev ? '네트워크 오류' : '인터넷 연결 오류'
+    }
+
+    const status = error.response.status
+    const detail = error.response.data?.detail || ''
+
+    // 서버 오류 (500+)
+    if (status >= 500) {
+      return isDev ? '서버 오류' : '서버 에러'
+    }
+
+    // Google Calendar 관련
+    if (recordType === 'CALENDAR') {
+      if (status === 401 || detail.includes('token')) {
+        return isDev ? 'Google 토큰 없음/만료' : '로그인 필요'
+      }
+      if (status === 403) {
+        return isDev ? 'Google 권한 없음' : '권한 없음'
+      }
+      if (status === 404) {
+        return isDev ? '캘린더 없음' : 'Google Calendar 연동 필요'
+      }
+      return isDev ? 'Google API 오류' : '잠시 후 다시 시도해주세요'
+    }
+
+    // Notion 관련
+    if (detail.includes('not connected')) {
+      return isDev ? 'Notion 연결 안됨' : 'Notion 연동 필요'
+    }
+    if (detail.includes('expired')) {
+      return isDev ? 'Notion 토큰 만료' : 'Notion 재연동 필요'
+    }
+    if (detail.includes('database') || detail.includes('No accessible')) {
+      return isDev ? 'Notion DB 없음' : 'Notion 설정 확인 필요'
+    }
+
+    // Notion 기타 오류
+    if (recordType === 'MEMO') {
+      return isDev ? 'Notion API 오류' : '잠시 후 다시 시도해주세요'
+    }
+
+    return isDev ? '알 수 없는 오류' : '다시 시도해주세요'
+  }
 
   const handleUploadSingle = async (finalData = null) => {
     if (!selectedCardId) return
@@ -346,8 +401,8 @@ export function Home({ user, session, onNavigateToSettings }) {
 
     setIsUploading(true)
     // 실패 상태 초기화
-    setFailedCardIds((prev) => {
-      const next = new Set(prev)
+    setFailedCards((prev) => {
+      const next = new Map(prev)
       next.delete(selectedCardId)
       return next
     })
@@ -373,9 +428,10 @@ export function Home({ user, session, onNavigateToSettings }) {
       }
     } catch (err) {
       console.error('업로드 실패:', err)
-      showToast('업로드 중 오류가 발생했습니다.', 'error')
-      // 실패 시 카드에 실패 표시
-      setFailedCardIds((prev) => new Set(prev).add(selectedCardId))
+      const reason = getFailReason(err, recordType)
+      showToast(`업로드 실패: ${reason}`, 'error')
+      // 실패 시 카드에 실패 원인 저장
+      setFailedCards((prev) => new Map(prev).set(selectedCardId, reason))
     } finally {
       setIsUploading(false)
       setSelectedCardId(null)
@@ -587,7 +643,8 @@ export function Home({ user, session, onNavigateToSettings }) {
                 showCheckbox={isBulkSelectMode}
                 onSelect={handleCardSelect}
                 onClick={handleCardClick}
-                uploadFailed={failedCardIds.has(card.id)}
+                uploadFailed={failedCards.has(card.id)}
+                failReason={failedCards.get(card.id)}
               />
             ))}
           </div>
