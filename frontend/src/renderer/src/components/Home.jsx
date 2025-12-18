@@ -310,6 +310,12 @@ export function Home({ user, session, onNavigateToSettings }) {
 
           if (res.data?.status === 'success') {
             removeCardFromUI(cardId)
+            // 이전 실패 상태 초기화
+            setFailedCards((prev) => {
+              const next = new Map(prev)
+              next.delete(cardId)
+              return next
+            })
             successCount++
           }
         } catch (err) {
@@ -473,8 +479,8 @@ export function Home({ user, session, onNavigateToSettings }) {
         } else {
           showToast('Notion에 업로드되었습니다.', 'success')
         }
-        // Don't remove card here - wait for SSE event with status=COMPLETED
-        // Card will be removed by applyRecordEvent when status=COMPLETED arrives
+        // 즉시 카드 제거 (빠른 피드백)
+        removeCardFromUI(selectedCardId)
       }
     } catch (err) {
       console.error('업로드 실패:', err)
