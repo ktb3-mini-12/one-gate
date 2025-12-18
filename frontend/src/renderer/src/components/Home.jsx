@@ -258,6 +258,16 @@ export function Home({ user, session, onNavigateToSettings }) {
     setSelectedCards(newSelected)
   }
 
+  const handleSelectAll = () => {
+    const selectableCards = filteredCards.filter((card) => {
+      // ANALYZED 상태이거나 업로드 실패한 카드만 선택
+      return card.status === 'analyzed' || failedCards.has(card.id)
+    })
+
+    const newSelected = new Set(selectableCards.map((card) => card.id))
+    setSelectedCards(newSelected)
+  }
+
   // 카드를 UI에서 제거
   const removeCardFromUI = (cardId) => {
     setCards((prev) => prev.filter((card) => card.id !== String(cardId)))
@@ -644,6 +654,19 @@ export function Home({ user, session, onNavigateToSettings }) {
                   }}
                 >
                   삭제
+                </button>
+                <button
+                  onClick={handleSelectAll}
+                  className="px-4 py-2 rounded-xl transition-all"
+                  style={{
+                    background: 'transparent',
+                    color: 'var(--text-secondary)',
+                    fontWeight: '500',
+                    fontSize: '14px',
+                    border: '1px solid var(--text-secondary)'
+                  }}
+                >
+                  전체 선택
                 </button>
               </>
             )}
