@@ -1,64 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { api } from '../lib/api'
+import { api, API_BASE_URL } from '../lib/api'
 import { CardItem } from './CardItem'
 import { CardDetail } from './CardDetail'
 import { ConfirmModal } from './ConfirmModal'
-
-const { ipcRenderer } = window.require('electron')
-
-// Toast Component
-function Toast({ message, type, onClose }) {
-  useEffect(() => {
-    const timer = setTimeout(onClose, 3000)
-    return () => clearTimeout(timer)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed top-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl flex items-center gap-3 z-50"
-      style={{
-        background: type === 'success'
-          ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.95), rgba(5, 150, 105, 0.95))'
-          : 'linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(185, 28, 28, 0.95))',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-        backdropFilter: 'blur(12px)',
-        animation: 'slide-down 0.3s ease-out'
-      }}
-    >
-      {type === 'success' && (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-      )}
-      <span style={{ color: '#fff', fontSize: '14px', fontWeight: '500' }}>{message}</span>
-    </div>
-  )
-}
-
-// Icon components
-const SettingsIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-  </svg>
-)
-
-const RefreshIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="1 4 1 10 7 10" />
-    <polyline points="23 20 23 14 17 14" />
-    <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-  </svg>
-)
-
-const LogoutIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-    <polyline points="16 17 21 12 16 7" />
-    <line x1="21" y1="12" x2="9" y2="12" />
-  </svg>
-)
+import { Toast } from './ui/Toast'
+import { SettingsIcon, RefreshIcon, LogoutIcon } from './ui/Icons'
 
 export function Home({ user, session, onNavigateToSettings }) {
   const [activeTab, setActiveTab] = useState('전체')
@@ -83,15 +30,23 @@ export function Home({ user, session, onNavigateToSettings }) {
     try {
       const res = await api.get('/records', { params: { user_id: user.id } })
       if (res.data?.status === 'success') {
-        const transformedCards = (res.data?.data || []).map((record) => ({
-          id: String(record.id),
-          summary: record.text,
-          category: record.category?.name || 'general',
-          date: record.created_at ? new Date(record.created_at).toLocaleDateString('ko-KR') : '',
-          status: record.status?.toLowerCase() || 'pending',
-          categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
-          rawData: record
-        }))
+        const now = new Date()
+        const transformedCards = (res.data?.data || []).map((record) => {
+          const createdAt = record.created_at ? new Date(record.created_at) : null
+          const pendingMinutes = createdAt ? (now - createdAt) / 1000 / 60 : 0
+          const isStale = record.status === 'PENDING' && pendingMinutes > 2
+
+          return {
+            id: String(record.id),
+            summary: record.result?.summary || record.text,
+            category: record.category?.name || 'general',
+            date: createdAt ? createdAt.toLocaleDateString('ko-KR') : '',
+            status: record.status?.toLowerCase() || 'pending',
+            categoryType: record.type === 'CALENDAR' ? '일정' : '메모',
+            isStale,
+            rawData: record
+          }
+        })
         setCards(transformedCards)
       }
     } catch (err) {
@@ -109,10 +64,141 @@ export function Home({ user, session, onNavigateToSettings }) {
       setCards([])
       setLoading(false)
     }
+  }, [user?.id])
 
-    ipcRenderer.on('refresh-data', fetchRecords)
+  // SSE: analysis completion / record updates with auto-reconnect
+  const [sseStatus, setSseStatus] = useState('connecting')
 
-    return () => ipcRenderer.removeAllListeners('refresh-data')
+  useEffect(() => {
+    if (!user?.id) return
+
+    let es = null
+    let reconnectAttempts = 0
+    let reconnectTimer = null
+    const maxReconnectAttempts = 5
+    const baseDelay = 1000
+
+    const applyRecordEvent = (payload) => {
+      const recordId = payload?.record_id
+      if (!recordId) return
+
+      setCards((prev) => {
+        const id = String(recordId)
+        const exists = prev.some((c) => c.id === id)
+        if (!exists) {
+          queueMicrotask(() => fetchRecords())
+          return prev
+        }
+
+        return prev.map((card) => {
+          if (card.id !== id) return card
+
+          const nextRaw = {
+            ...card.rawData,
+            status: payload?.status || card.rawData?.status,
+            result: payload?.analysis_data || card.rawData?.result
+          }
+
+          if (payload?.analysis_data?.type) {
+            nextRaw.type = payload.analysis_data.type
+          }
+
+          return {
+            ...card,
+            rawData: nextRaw,
+            status: (nextRaw.status || card.rawData?.status || 'PENDING').toLowerCase(),
+            summary: nextRaw.result?.summary || nextRaw.text || card.summary,
+            categoryType: nextRaw.type === 'CALENDAR' ? '일정' : '메모'
+          }
+        })
+      })
+    }
+
+    const connect = () => {
+      const streamUrl = `${API_BASE_URL}/records/stream?user_id=${encodeURIComponent(user.id)}`
+      es = new EventSource(streamUrl)
+      setSseStatus('connecting')
+
+      es.addEventListener('connected', () => {
+        setSseStatus('connected')
+        reconnectAttempts = 0
+      })
+
+      // record_created: 새 PENDING 카드 추가 (전체 재조회 없이 즉시 추가)
+      es.addEventListener('record_created', (evt) => {
+        try {
+          const payload = JSON.parse(evt.data)
+          const recordId = payload?.record_id
+          if (!recordId) return
+
+          // 새 카드를 목록 최상단에 추가
+          const newCard = {
+            id: String(recordId),
+            summary: payload.text || '분석 중...',
+            category: 'general',
+            date: payload.created_at
+              ? new Date(payload.created_at).toLocaleDateString('ko-KR')
+              : new Date().toLocaleDateString('ko-KR'),
+            status: 'pending',
+            categoryType: payload.type === 'CALENDAR' ? '일정' : '메모',
+            isStale: false,
+            rawData: {
+              id: recordId,
+              status: 'PENDING',
+              type: payload.type || 'MEMO',
+              text: payload.text,
+              created_at: payload.created_at
+            }
+          }
+
+          setCards((prev) => {
+            // 이미 존재하면 추가하지 않음
+            if (prev.some((c) => c.id === String(recordId))) return prev
+            return [newCard, ...prev]
+          })
+        } catch (e) {
+          console.error('SSE record_created parse error:', e)
+        }
+      })
+
+      es.addEventListener('analysis_completed', (evt) => {
+        try {
+          applyRecordEvent(JSON.parse(evt.data))
+        } catch (e) {
+          console.error('SSE parse error:', e)
+        }
+      })
+
+      es.addEventListener('record_updated', (evt) => {
+        try {
+          applyRecordEvent(JSON.parse(evt.data))
+        } catch (e) {
+          console.error('SSE parse error:', e)
+        }
+      })
+
+      es.onerror = () => {
+        es.close()
+        setSseStatus('disconnected')
+
+        if (reconnectAttempts < maxReconnectAttempts) {
+          const delay = baseDelay * Math.pow(2, reconnectAttempts)
+          reconnectAttempts++
+          console.log(`SSE reconnecting in ${delay}ms (attempt ${reconnectAttempts})`)
+          reconnectTimer = setTimeout(connect, delay)
+        } else {
+          console.error('SSE max reconnect attempts reached')
+          showToast('실시간 연결이 끊어졌습니다. 새로고침해주세요.', 'error')
+        }
+      }
+    }
+
+    connect()
+
+    return () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (es) es.close()
+    }
   }, [user?.id])
 
   const filteredCards = cards.filter(
@@ -138,17 +224,6 @@ export function Home({ user, session, onNavigateToSettings }) {
     setSelectedCards(newSelected)
   }
 
-  // 레코드 완료 처리 (soft delete)
-  const completeRecord = async (recordId) => {
-    try {
-      await api.post(`/records/${recordId}/complete`)
-      return true
-    } catch (err) {
-      console.error('완료 처리 실패:', err)
-      return false
-    }
-  }
-
   // 카드를 UI에서 제거
   const removeCardFromUI = (cardId) => {
     setCards((prev) => prev.filter((card) => card.id !== String(cardId)))
@@ -159,40 +234,55 @@ export function Home({ user, session, onNavigateToSettings }) {
 
     setIsUploading(true)
     let successCount = 0
+    let failedCount = 0
+    const newFailedIds = new Set()
 
     try {
       for (const cardId of selectedCards) {
         const card = cards.find((c) => c.id === cardId)
         if (!card) continue
 
-        let uploadSuccess = false
-
-        if (card.rawData.type === 'CALENDAR') {
-          if (!googleToken) continue
-          try {
-            await addToCalendar(card.rawData, googleToken)
-            uploadSuccess = true
-          } catch (err) {
-            console.error('캘린더 등록 실패:', err)
-          }
-        } else {
-          try {
-            await addToNotion(card.rawData)
-            uploadSuccess = true
-          } catch (err) {
-            console.error('노션 등록 실패:', err)
-          }
+        if (card.rawData?.status !== 'ANALYZED') {
+          continue
         }
 
-        if (uploadSuccess) {
-          await completeRecord(cardId)
-          removeCardFromUI(cardId)
-          successCount++
+        const recordType = card.rawData?.result?.type || card.rawData?.type
+        if (recordType === 'CALENDAR' && !googleToken) {
+          newFailedIds.add(cardId)
+          failedCount++
+          continue
         }
+
+        try {
+          const res = await api.post(
+            `/records/${cardId}/upload`,
+            { final_data: null },
+            {
+              headers: recordType === 'CALENDAR' ? { 'X-Google-Token': googleToken } : {}
+            }
+          )
+
+          if (res.data?.status === 'success') {
+            removeCardFromUI(cardId)
+            successCount++
+          }
+        } catch (err) {
+          console.error(`업로드 실패 (${cardId}):`, err)
+          newFailedIds.add(cardId)
+          failedCount++
+        }
+      }
+
+      // 실패한 카드 표시
+      if (newFailedIds.size > 0) {
+        setFailedCardIds((prev) => new Set([...prev, ...newFailedIds]))
       }
 
       if (successCount > 0) {
         showToast(`${successCount}개 항목이 업로드되었습니다.`, 'success')
+      }
+      if (failedCount > 0) {
+        showToast(`${failedCount}개 항목 업로드에 실패했습니다.`, 'error')
       }
 
       setSelectedCards(new Set())
@@ -203,48 +293,6 @@ export function Home({ user, session, onNavigateToSettings }) {
     } finally {
       setIsUploading(false)
     }
-  }
-
-  const addToCalendar = async (record, googleToken) => {
-    const tomorrow = new Date()
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    tomorrow.setHours(14, 0, 0, 0)
-    const endTime = new Date(tomorrow)
-    endTime.setHours(15, 0, 0, 0)
-
-    const formatDateTime = (date) => date.toISOString().slice(0, 19)
-
-    const res = await api.post(
-      '/calendar/create',
-      {
-        summary: record.text,
-        description: 'One Gate에서 등록된 일정',
-        start_time: formatDateTime(tomorrow),
-        end_time: formatDateTime(endTime)
-      },
-      {
-        headers: { 'X-Google-Token': googleToken }
-      }
-    )
-
-    if (res.data?.status !== 'success') {
-      throw new Error(res.data?.message || 'Calendar upload failed')
-    }
-
-    return res.data
-  }
-
-  const addToNotion = async (record) => {
-    const res = await api.post('/notion/create', {
-      content: record.text,
-      category: record.category?.name || '아이디어'
-    })
-
-    if (res.data?.status !== 'success') {
-      throw new Error(res.data?.message || 'Notion upload failed')
-    }
-
-    return res.data
   }
 
   const handleBulkDeleteClick = () => {
@@ -273,34 +321,60 @@ export function Home({ user, session, onNavigateToSettings }) {
     }
   }
 
-  const handleUploadSingle = async () => {
+  // 업로드 실패한 카드 ID 추적 (UI 전용)
+  const [failedCardIds, setFailedCardIds] = useState(new Set())
+
+  const handleUploadSingle = async (finalData = null) => {
     if (!selectedCardId) return
 
     const googleToken = localStorage.getItem('google_provider_token')
     const card = cards.find((c) => c.id === selectedCardId)
-    if (!card?.rawData?.type) return
+    if (!card?.rawData) return
+
+    if (card.rawData?.status !== 'ANALYZED') {
+      showToast('분석이 완료된 항목만 업로드할 수 있습니다.', 'error')
+      return
+    }
+
+    // CALENDAR 타입인데 Google 토큰이 없으면 에러
+    const recordType = finalData?.type || card.rawData?.result?.type || card.rawData?.type
+    if (recordType === 'CALENDAR' && !googleToken) {
+      showToast('Google 토큰이 없습니다. 재로그인 해주세요.', 'error')
+      return
+    }
 
     setIsUploading(true)
+    // 실패 상태 초기화
+    setFailedCardIds((prev) => {
+      const next = new Set(prev)
+      next.delete(selectedCardId)
+      return next
+    })
 
     try {
-      if (card.rawData.type === 'CALENDAR') {
-        if (!googleToken) {
-          showToast('Google 토큰이 없습니다. 재로그인 해주세요.', 'error')
-          return
+      const res = await api.post(
+        `/records/${selectedCardId}/upload`,
+        { final_data: finalData },
+        {
+          headers: recordType === 'CALENDAR' ? { 'X-Google-Token': googleToken } : {}
         }
-        await addToCalendar(card.rawData, googleToken)
-        showToast('Google 캘린더에 등록되었습니다.', 'success')
-      } else {
-        await addToNotion(card.rawData)
-        showToast('Notion에 업로드되었습니다.', 'success')
-      }
+      )
 
-      // 완료 처리 후 UI에서 제거
-      await completeRecord(selectedCardId)
-      removeCardFromUI(selectedCardId)
+      if (res.data?.status === 'success') {
+        const uploadType = res.data?.data?.type
+        if (uploadType === 'calendar') {
+          showToast('Google 캘린더에 등록되었습니다.', 'success')
+        } else {
+          showToast('Notion에 업로드되었습니다.', 'success')
+        }
+        // 성공 시 화면에서 제거
+        removeCardFromUI(selectedCardId)
+      }
     } catch (err) {
       console.error('업로드 실패:', err)
       showToast('업로드 중 오류가 발생했습니다.', 'error')
+      // 실패 시 카드에 실패 표시
+      setFailedCardIds((prev) => new Set(prev).add(selectedCardId))
     } finally {
       setIsUploading(false)
       setSelectedCardId(null)
@@ -495,6 +569,7 @@ export function Home({ user, session, onNavigateToSettings }) {
                 showCheckbox={isBulkSelectMode}
                 onSelect={handleCardSelect}
                 onClick={handleCardClick}
+                uploadFailed={failedCardIds.has(card.id)}
               />
             ))}
           </div>

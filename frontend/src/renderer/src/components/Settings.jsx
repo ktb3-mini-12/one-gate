@@ -1,61 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../lib/api'
-
-// Icons
-const SyncIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="1 4 1 10 7 10" />
-    <polyline points="23 20 23 14 17 14" />
-    <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-  </svg>
-)
-
-const CheckIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="20 6 9 17 4 12" />
-  </svg>
-)
-
-const ChevronIcon = ({ isOpen }) => (
-  <svg
-    width="20"
-    height="20"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    style={{
-      transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-      transition: 'transform 0.3s ease'
-    }}
-  >
-    <polyline points="6 9 12 15 18 9" />
-  </svg>
-)
-
-// Toast Component
-function Toast({ message, type, onClose }) {
-  useEffect(() => {
-    const timer = setTimeout(onClose, 3000)
-    return () => clearTimeout(timer)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed top-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl flex items-center gap-3 z-50 animate-slide-down"
-      style={{
-        background: type === 'success'
-          ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.95), rgba(5, 150, 105, 0.95))'
-          : 'linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(185, 28, 28, 0.95))',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-        backdropFilter: 'blur(12px)'
-      }}
-    >
-      {type === 'success' && <CheckIcon />}
-      <span style={{ color: '#fff', fontSize: '14px', fontWeight: '500' }}>{message}</span>
-    </div>
-  )
-}
+import { Toast } from './ui/Toast'
+import { SyncIcon, ChevronIcon } from './ui/Icons'
 
 // Service Card Component
 function ServiceCard({ icon, name, description, isConnected, isExpanded, onToggle, children, accentColor }) {
