@@ -33,7 +33,7 @@ fi
 # 5. 서버 재시작 (nohup)
 echo "🔥 [4/4] 서버를 재시작합니다..."
 source venv/bin/activate
-nohup uvicorn main:app --reload --host 0.0.0.0 --port $PORT > $LOG_FILE 2>&1 &
+nohup uvicorn main:app --reload --host 0.0.0.0 --port $PORT > $LOG_FILE 2>&1 < /dev/null &
 
 echo "✅ 배포 완료! (잠시 후 로그가 출력됩니다. 나가려면 Ctrl+C)"
 echo "-------------------------------------------------------"
